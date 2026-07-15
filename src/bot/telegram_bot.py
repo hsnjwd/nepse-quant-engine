@@ -1,7 +1,4 @@
-import os
 import requests
-
-from dotenv import load_dotenv
 
 from telegram import Update
 from telegram.ext import (
@@ -9,15 +6,10 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
-load_dotenv()
-
-# Base URL of your FastAPI server
-API_BASE_URL = os.getenv(
-    "API_BASE_URL",
-    "http://127.0.0.1:8000"
+from src.config import (
+    API_BASE_URL,
+    TELEGRAM_TOKEN,
 )
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,12 +99,17 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
 
-    if not TOKEN:
+    if not TELEGRAM_TOKEN:
         raise ValueError(
             "TELEGRAM_TOKEN not found in .env"
         )
 
-    app = Application.builder().token(TOKEN).build()
+    app = (
+        Application
+        .builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
