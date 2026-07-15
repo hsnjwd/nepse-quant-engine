@@ -8,3 +8,14 @@ venv/
 
 # Large datasets
 data/raw/*.csv
+
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
