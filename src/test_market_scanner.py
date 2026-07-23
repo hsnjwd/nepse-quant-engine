@@ -1,4 +1,4 @@
-from src.scanners.market_scanner import scan_market
+from src.scanner.engine import scan_market
 
 scan = scan_market()
 

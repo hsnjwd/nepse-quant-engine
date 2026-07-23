@@ -1,4 +1,5 @@
 from pathlib import Path
+import traceback
 
 from src.config import DATA_DIRECTORY
 from src.engine.analyzer import analyze_stock
@@ -21,12 +22,10 @@ def scan_market():
 
     for file in files:
 
-        # Ignore sample/test files
         if file.stem.lower() == "sample":
             continue
 
         try:
-
             analysis = analyze_stock(str(file))
 
             analysis["symbol"] = file.stem.upper()
@@ -34,7 +33,6 @@ def scan_market():
             results.append(analysis)
 
         except Exception as e:
-
             skipped.append(
                 {
                     "symbol": file.stem.upper(),
@@ -42,9 +40,10 @@ def scan_market():
                 }
             )
 
-            print(
-                f"[WARNING] {file.stem.upper()} skipped -> {type(e).__name__}: {e}"
-            )
+            print("\n" + "=" * 60)
+            print(f"ERROR: {file.stem.upper()}")
+            traceback.print_exc()
+            print("=" * 60 + "\n")
 
     results.sort(
         key=lambda stock: stock["score"],
