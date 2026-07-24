@@ -1,81 +1,49 @@
 from fastapi import FastAPI
-import math
-from pathlib import Path
-from fastapi import HTTPException
 
-from src.loaders.csv_loader import load_csv
-
-from src.indicators.moving_average import add_moving_averages
-from src.indicators.momentum import add_momentum_indicators
-from src.indicators.volume import add_volume_indicators
-from src.indicators.volatility import add_volatility_indicators
-
-from src.signals.scorer import (
-    calculate_score,
-    generate_signal
-)
-
+from src.api.health import router as health_router
+from src.api.analyze import router as analyze_router
+from src.api.watchlist import router as watchlist_router
+from src.api.scanner import router as scanner_router
+from src.api.backtest import router as backtest_router
+from src.api.portfolio import router as portfolio_router
 
 app = FastAPI(
     title="NEPSE Quant Engine API"
 )
 
+# Health
+app.include_router(health_router)
 
-def safe_float(value):
+# Analyze
+app.include_router(
+    analyze_router,
+    prefix="/analyze",
+    tags=["Analyze"]
+)
 
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return None
+# Watchlist
+app.include_router(
+    watchlist_router,
+    tags=["Watchlist"]
+)
 
-    return float(value)
+# Market Scanner
+app.include_router(
+    scanner_router,
+    prefix="/market",
+    tags=["Market Scanner"]
+)
 
+# Backtest
+app.include_router(
+    backtest_router,
+    prefix="/backtest",
+    tags=["Backtest"]
+)
 
-
-def analyze_stock(file):
-
-    df = load_csv(file)
-
-    df = add_moving_averages(df)
-    df = add_momentum_indicators(df)
-    df = add_volume_indicators(df)
-    df = add_volatility_indicators(df)
-
-    latest = df.iloc[-1]
-
-    score = calculate_score(latest)
-
-    signal = generate_signal(score)
-
-    return {
-        "price": safe_float(latest["Close"]),
-        "score": score,
-        "signal": signal,
-        "rsi": safe_float(latest["RSI"]),
-        "macd": safe_float(latest["MACD"])
-    }
-
-
-
-@app.get("/")
-def home():
-
-    return {
-        "status": "NEPSE Quant Engine Running"
-    }
-
-
-
-@app.get("/analyze/{symbol}")
-def analyze(symbol: str):
-
-    # Convert user input to lowercase
-    symbol = symbol.lower()
-
-    file_path = Path("data/raw") / f"{symbol}.csv"
-
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Stock data not found: {symbol}"
-        )
-
-    return analyze_stock(str(file_path))
+# Portfolio
+app.include_router(
+    portfolio_router,
+    prefix="/portfolio",
+    tags=["Portfolio"]
+)

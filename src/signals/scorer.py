@@ -1,62 +1,103 @@
-def calculate_score(row):
+def calculate_score(row, pattern):
     """
-    Calculate stock technical score
-    Range: -10 to +10
+    Calculate technical score and explain it.
     """
 
     score = 0
 
+    breakdown = {
+        "trend": 0,
+        "rsi": 0,
+        "macd": 0,
+        "volume": 0,
+        "pattern": 0,
+        "reasons": []
+    }
 
+    # -----------------------
     # Trend
+    # -----------------------
+
     if row["Close"] > row["SMA_20"]:
         score += 1
+        breakdown["trend"] += 1
+        breakdown["reasons"].append("Above SMA20")
     else:
         score -= 1
-
+        breakdown["trend"] -= 1
+        breakdown["reasons"].append("Below SMA20")
 
     if row["Close"] > row["SMA_50"]:
         score += 1
+        breakdown["trend"] += 1
+        breakdown["reasons"].append("Above SMA50")
     else:
         score -= 1
+        breakdown["trend"] -= 1
+        breakdown["reasons"].append("Below SMA50")
 
-
+    # -----------------------
     # RSI
+    # -----------------------
+
     if row["RSI"] < 35:
         score += 2
+        breakdown["rsi"] += 2
+        breakdown["reasons"].append("RSI Oversold")
 
     elif row["RSI"] > 70:
         score -= 2
+        breakdown["rsi"] -= 2
+        breakdown["reasons"].append("RSI Overbought")
 
     elif 40 <= row["RSI"] <= 60:
         score += 1
+        breakdown["rsi"] += 1
+        breakdown["reasons"].append("Healthy RSI")
 
-
+    # -----------------------
     # MACD
+    # -----------------------
+
     if row["MACD"] > row["MACD_SIGNAL"]:
         score += 2
+        breakdown["macd"] += 2
+        breakdown["reasons"].append("Bullish MACD")
     else:
         score -= 2
+        breakdown["macd"] -= 2
+        breakdown["reasons"].append("Bearish MACD")
 
-
+    # -----------------------
     # Volume
-    if row["VOLUME_SIGNAL"] == "HIGH_VOLUME":
-        score += 2
+    # -----------------------
 
-    elif row["VOLUME_SIGNAL"] == "LOW_VOLUME":
-        score -= 1
+    volume_points = int(row["VOLUME_SCORE"])
 
+    score += volume_points
 
-    return score
+    breakdown["volume"] = volume_points
 
+    if volume_points > 0:
+        breakdown["reasons"].append("Strong Volume")
 
+    elif volume_points < 0:
+        breakdown["reasons"].append("Weak Volume")
 
-def generate_signal(score):
+    # -----------------------
+    # Candlestick Pattern
+    # -----------------------
 
-    if score >= 5:
-        return "BUY"
+    pattern_score = pattern["score"]
 
-    elif score <= -3:
-        return "SELL"
+    score += pattern_score
 
-    else:
-        return "HOLD"
+    breakdown["pattern"] = pattern_score
+
+    if pattern_score > 0:
+        breakdown["reasons"].append(pattern["name"])
+
+    elif pattern_score < 0:
+        breakdown["reasons"].append(pattern["name"])
+
+    return score, breakdown

@@ -1,8 +1,9 @@
 from pathlib import Path
-import traceback
 
 from src.config import DATA_DIRECTORY
 from src.engine.analyzer import analyze_stock
+from src.logging.logger import logger
+from src.scanner.ranking import rank_market
 
 
 def get_stock_files():
@@ -40,17 +41,11 @@ def scan_market():
                 }
             )
 
-            print("\n" + "=" * 60)
-            print(f"ERROR: {file.stem.upper()}")
-            traceback.print_exc()
-            print("=" * 60 + "\n")
+            logger.exception("Error analyzing %s", file.stem.upper())
 
-    results.sort(
-        key=lambda stock: stock["score"],
-        reverse=True,
-    )
+    ranked_results = rank_market(results)
 
     return {
-        "results": results,
+        "results": ranked_results,
         "skipped": skipped,
     }

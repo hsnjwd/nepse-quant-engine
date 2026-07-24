@@ -54,3 +54,19 @@ data/raw/*.csv
 # ==========================================
 .DS_Store
 Thumbs.db
+
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# User/runtime data
+portfolio.json
+data/alerts/
+data/watchlist/
+
+# Editor
+.vscode/
