@@ -1,83 +1,135 @@
-"# NEPSE Quant Engine
+# NEPSE Quant Engine
+![CI](https://github.com/hsnjwd/nepse-quant-engine/actions/workflows/ci.yml/badge.svg)
 
 Open-source quantitative trading and market analysis framework for the Nepal Stock Exchange (NEPSE).
 
-NEPSE Quant Engine is a research-oriented Python platform for analyzing listed securities, computing technical indicators, generating trading signals, and exposing results through a lightweight API. It is designed for local analysis, backtesting workflows, and experimentation rather than as a turnkey broker integration or fully autonomous trading system.
+NEPSE Quant Engine is a research-oriented Python platform for analyzing listed securities, computing technical indicators, generating trading signals, simulating trade executions (backtesting), computing quantitative performance metrics, and exposing results through a lightweight FastAPI REST interface.
 
-> This project is not a Telegram bot. It includes an optional Telegram client for monitoring and notifications, but the core system is the analysis and signal-generation framework.
+> This project is not a Telegram bot. It includes an optional Telegram client for monitoring and notifications, but the core system is the analysis, backtesting, and signal-generation framework.
+
+---
 
 ## Overview
 
 NEPSE Quant Engine brings together several building blocks commonly used in quantitative finance:
 
-- local CSV-based market data ingestion,
-- technical indicator computation,
-- market structure and pattern analysis,
-- scoring and signal generation,
-- portfolio/risk-oriented trade planning,
-- a FastAPI-based analysis interface,
-- and an optional Telegram client for interacting with the engine.
+- Local CSV-based market data ingestion and validation.
+- Technical indicator calculation (Moving Averages, RSI, MACD, ATR, Volume Context).
+- Market structure and candlestick pattern analysis (Support/Resistance, Trend, Patterns).
+- Scoring, confidence estimation, and trade-plan generation.
+- **Professional Backtesting Engine**: Replays historical candles, simulates long trade executions under adverse slippage and commission, computes statistical metrics, and generates summary reports.
+- **Stateful Alert System**: Tracks signal, confidence, score, trend, volume, and target changes.
+- **Market Scanner**: Ranks stocks and screens for Buy, Sell, and Strong Buy signals.
+- **Watchlist & Portfolio Analysis**: Manages watchlist symbols and analyzes portfolio holdings, valuation, PnL, and recommendations.
+- **FastAPI REST API**: Clean, typed interface exposing analysis, backtesting, market scanner, portfolio, and watchlist capabilities.
+- **Optional Telegram Bot Client**: Interactively queries the engine API.
 
-The project is intentionally modular so that researchers and developers can inspect, extend, and adapt the signal pipeline for NEPSE-specific market behavior.
+---
 
 ## Key Features
 
-- Data loading and preprocessing for NEPSE market data stored as CSV files
-- Technical indicators including moving averages, momentum, volume, and volatility measures
-- Market structure analysis with support, resistance, and trend heuristics
-- Candlestick pattern detection and scoring
-- Signal generation and confidence estimation
-- Trade-plan generation with basic risk/reward and position sizing logic
-- FastAPI endpoints for analysis, market scanning, watchlist management, and portfolio summaries
-- Optional Telegram client for receiving analysis results from the API
+- **Data Ingestion**: Preprocessing and loading for NEPSE market CSV files.
+- **Technical Analysis**: Indicators including Moving Averages (20, 50, 180), RSI, MACD, Volume Context, and ATR Volatility.
+- **Market Structure & Patterns**: Support, resistance, trend detection, and candlestick pattern scoring.
+- **Signal Engine**: Scoring (0–10), confidence rating (High/Medium/Low), and trade plan generation (Entry, Stop Loss, Target 1/2/3).
+- **Backtesting Module**: Replays historical candles, models execution friction (commission and slippage), tracks exit reasons (`TARGET`, `STOP_LOSS`, `SELL_SIGNAL`, `END_OF_DATA`), calculates performance metrics (win rate, profit factor, expectancy, drawdown, Sharpe ratio, CAGR), and outputs reports.
+- **Market Scanner**: Screens historical data to produce Top 10 rankings, Buy Lists, Sell Lists, and Strong Buy candidates.
+- **Watchlist Management**: Add, remove, load, and scan custom watchlists for active signals.
+- **Stateful Alerts**: Detects initial signals and subsequent state changes across trend, volume, target, score, and confidence.
+- **Portfolio Analytics**: Evaluates portfolio cost, current market value, unrealized PnL, PnL percentage, and actionable holding advice.
+- **REST API**: Fully typed FastAPI interface with complete input validation and error handling.
+- **Comprehensive Test Suite**: 55 automated unit and integration tests using `pytest`.
 
-## Architecture Overview
-
-The framework is organized around a layered pipeline:
-
-1. Data ingestion
-   - Market data is loaded from CSV files in the data directory.
-
-2. Indicator and feature engineering
-   - Technical indicators, volatility measures, and volume context are calculated.
-
-3. Market structure and pattern analysis
-   - Support/resistance levels, trend signals, and candlestick patterns are evaluated.
-
-4. Scoring and decision logic
-   - Signals are scored, confidence levels are estimated, and trade recommendations are assembled.
-
-5. API and client surfaces
-   - The core engine is exposed through FastAPI, and an optional Telegram client can query the API.
-
-This separation makes the framework easier to test, extend, and customize for new strategies or data sources.
+---
 
 ## Repository Structure
 
 ```text
 .
-├── launcher/                 # Service launcher and process helpers
+├── docs/                      # Technical documentation
+│   ├── ARCHITECTURE.md       # Architecture overview
+│   ├── BACKTESTING.md        # Complete backtesting engine documentation
+│   ├── CHANGELOG.md         # Release history
+│   ├── CONTRIBUTING.md       # Contribution guidelines
+│   ├── DECISIONS.md          # Architectural Decision Records (ADRs)
+│   └── ROADMAP.md            # Future development roadmap
+├── launcher/                  # Service launcher and process helpers
 ├── src/
-│   ├── alerts/               # Alert rules and alert processing
-│   ├── api/                  # FastAPI routers and application entrypoint
-│   ├── bot/                  # Optional Telegram client implementation
-│   ├── decision/             # Signal and decision logic
-│   ├── engine/               # Core analysis pipeline
-│   ├── indicators/           # Technical indicators
-│   ├── loaders/              # Data loading utilities
-│   ├── market_structure/     # Trend and support/resistance logic
-│   ├── patterns/             # Candlestick pattern detection
-│   ├── portfolio/            # Portfolio-oriented analysis
-│   ├── recommendations/      # Trade plan generation
-│   ├── risk/                 # Risk and reward logic
-│   ├── scanner/              # Market scanning utilities
-│   ├── watchlist/            # Watchlist management and scanning
-│   └── ...
-├── data/                     # Market data files used by the engine
-├── logs/                     # Runtime logs
-├── pids/                     # Process state files
+│   ├── alerts/                # Stateful alert rules and engine
+│   ├── api/                   # FastAPI REST API endpoints
+│   ├── backtest/              # Backtest engine, trade simulator, metrics, and report generator
+│   ├── bot/                   # Optional Telegram client implementation
+│   ├── cache/                 # Caching utilities
+│   ├── decision/              # Signal and decision logic
+│   ├── engine/                # Core technical analysis pipeline
+│   ├── indicators/            # Technical indicators (MA, RSI, MACD, Volume, Volatility)
+│   ├── loaders/               # CSV data loading utilities
+│   ├── logging/               # Centralized logging framework
+│   ├── market_structure/      # Support, resistance, and trend heuristics
+│   ├── patterns/              # Candlestick pattern detection
+│   ├── portfolio/             # Portfolio valuation, PnL, and advice generator
+│   ├── processors/            # Data processing pipelines
+│   ├── recommendations/       # Trade plan generation
+│   ├── risk/                  # Risk/reward and position sizing
+│   ├── scanner/               # Market scanning utilities
+│   ├── scoring/               # Indicator scoring logic
+│   ├── services/              # Market service aggregators
+│   ├── signals/               # Signal scoring engine
+│   ├── validators/            # Data validation utilities
+│   └── watchlist/             # Watchlist management and scanning
+├── data/                      # Market CSV data files
+├── logs/                      # Runtime logs
+├── pids/                      # Process state files
+├── tests/                     # Automated test suite (55 pytest tests)
 └── README.md
 ```
+
+---
+
+## FastAPI Endpoints
+
+| Category | Method | Endpoint | Description |
+| :--- | :--- | :--- | :--- |
+| **Health** | `GET` | `/` | Retrieve engine operational status |
+| **Analysis** | `GET` | `/analyze/{symbol}` | Single-stock technical analysis, signals, and alerts |
+| **Backtest** | `GET` | `/backtest/{symbol}` | Execute backtest run, returns trades, metrics, and report |
+| **Portfolio** | `GET` | `/portfolio/` | Portfolio holdings analysis, valuation, and PnL |
+| **Scanner** | `GET` | `/market/` | Market-wide summary statistics |
+| **Scanner** | `GET` | `/market/top10` | Top 10 ranked stock candidates |
+| **Scanner** | `GET` | `/market/buylist` | Active `BUY` signal candidates |
+| **Scanner** | `GET` | `/market/selllist` | Active `SELL` signal candidates |
+| **Scanner** | `GET` | `/market/strongbuy` | High-confidence `STRONG BUY` candidates |
+| **Watchlist** | `GET` | `/watchlist` | Load current watchlist symbols |
+| **Watchlist** | `POST` | `/watchlist/add/{symbol}` | Add stock symbol to watchlist |
+| **Watchlist** | `DELETE` | `/watchlist/remove/{symbol}` | Remove stock symbol from watchlist |
+| **Watchlist** | `GET` | `/watchlist/scan` | Scan all watchlist stocks for active signals |
+
+---
+
+## Backtesting Module
+
+The backtesting framework ([docs/BACKTESTING.md](docs/BACKTESTING.md)) provides historical replay and trade execution simulation:
+
+- **Orchestration (`engine.py`)**: Replays historical candles, evaluates signals, simulates `BUY` trades, calculates statistics, and builds reports.
+- **Trade Simulator (`trade_simulator.py`)**: Simulates long trade executions, models adverse entry/exit slippage and round-trip commission, and tracks explicit exit reasons (`STOP_LOSS`, `TARGET`, `SELL_SIGNAL`, `END_OF_DATA`).
+- **Metrics Library (`metrics.py`)**: Calculates pure performance analytics: Win Rate, Profit Factor, Average Win/Loss, Expectancy, Maximum Drawdown, Sharpe Ratio, Total Return, and CAGR.
+- **Report Generator (`report.py`)**: Converts completed trade lists and metrics into structured summary dictionaries and human-readable text overviews.
+
+Example usage:
+```python
+from src.backtest.engine import run_backtest
+
+# Run backtest with 0.1% commission and 0.5% slippage
+results = run_backtest(
+    csv_file="data/raw/nabbc.csv",
+    commission=0.001,
+    slippage=0.005,
+)
+
+print(results["report"]["summary"])
+```
+
+---
 
 ## Installation
 
@@ -86,56 +138,55 @@ This separation makes the framework easier to test, extend, and customize for ne
 - Python 3.10+
 - pip
 
-### Install dependencies
+### Install Dependencies
 
 ```bash
-pip install fastapi uvicorn requests python-dotenv python-telegram-bot pandas
+pip install -r requirements.txt
 ```
 
-### Environment variables
+or install manually:
 
-Create a `.env` file in the project root with the following values if you plan to use the Telegram client:
+```bash
+pip install fastapi uvicorn requests python-dotenv python-telegram-bot pandas pytest
+```
+
+### Environment Variables
+
+Create a `.env` file in the project root if you plan to use the Telegram client or custom settings:
 
 ```env
 TELEGRAM_TOKEN=your_telegram_bot_token
 API_BASE_URL=http://127.0.0.1:8000
+DATA_DIRECTORY=data/raw
 ```
 
-The API also expects market data files to be available under the data directory.
+---
 
-## Quick Start
+## Running Locally
 
-1. Clone the repository.
-2. Install the dependencies above.
-3. Place your NEPSE market CSV files in the data directory.
-4. Start the API.
-5. Optionally start the Telegram client.
+### 1. Start the API Server
 
-## Running the API
-
-Start the FastAPI server from the project root:
+Start the FastAPI server using `uvicorn`:
 
 ```bash
 python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Once running, the API will expose endpoints for:
+Or run the batch launcher on Windows:
 
-- `/` for health/landing information
-- `/analyze/{symbol}` for single-stock analysis
-- `/market` for market scanning summaries
-- `/watchlist` for watchlist management
-- `/portfolio` for portfolio-oriented views
-
-Example:
-
-```bash
-curl http://127.0.0.1:8000/analyze/nabil
+```cmd
+start_engine.bat
 ```
 
-## Running the Telegram Client
+### 2. Run the Test Suite
 
-The repository also includes an optional Telegram client that can query the API and present analysis results in a chat interface.
+Run the full automated test suite (55 tests):
+
+```bash
+python -m pytest
+```
+
+### 3. Run the Optional Telegram Client
 
 Set your Telegram bot token in `.env`, then run:
 
@@ -143,31 +194,13 @@ Set your Telegram bot token in `.env`, then run:
 python -m src.bot.telegram_bot
 ```
 
-This client is intended as a lightweight interface to the engine and is not the core product itself.
-
-## Current Project Status
-
-NEPSE Quant Engine is currently in active development and is best understood as an experimental research framework rather than a production-grade trading platform.
-
-Current capabilities include:
-
-- local CSV-driven analysis,
-- technical and structural signal generation,
-- API access to analysis results,
-- and optional Telegram-based interaction.
-
-It does not currently provide broker integration, live execution, or a full institutional trading stack.
+---
 
 ## Roadmap
 
-Planned areas of improvement include:
+For details on planned features, upcoming enhancements, and long-term milestones, refer to the [ROADMAP.md](docs/ROADMAP.md).
 
-- stronger packaging and dependency management,
-- more robust configuration and environment handling,
-- expanded test coverage and CI automation,
-- improved data pipeline support for larger historical datasets,
-- better documentation and examples for strategy development,
-- and optional support for additional data providers and execution integrations.
+---
 
 ## Contributing
 
@@ -182,7 +215,8 @@ If you would like to contribute:
 
 Please keep changes focused, documented, and aligned with the project’s research-oriented scope.
 
+---
+
 ## License
 
-This repository does not currently include a license file. If you intend to reuse or redistribute the project publicly, please add an explicit open-source license before distribution.
-" 
+This repository does not currently include an open-source license file. If you intend to reuse or redistribute the project publicly, please add an explicit open-source license before distribution.
