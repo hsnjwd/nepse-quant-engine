@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEPSE Quant Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- ============================================================
+         Sidebar
+         ============================================================ -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo-icon">NQ</div>
+        <div class="brand-text">
+          <h1>NEPSE Quant</h1>
+          <span>Engine v0.6</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Main</div>
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-icon">📊</span>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-view="analysis">
+          <span class="nav-icon">🔍</span>
+          <span>Analysis</span>
+        </button>
+        <button class="nav-item" data-view="backtest">
+          <span class="nav-icon">⏪</span>
+          <span>Backtest</span>
+        </button>
+
+        <div class="nav-section-label">Markets</div>
+        <button class="nav-item" data-view="scanner">
+          <span class="nav-icon">📡</span>
+          <span>Scanner</span>
+          <span class="nav-badge" id="scanner-badge">Live</span>
+        </button>
+        <button class="nav-item" data-view="watchlist">
+          <span class="nav-icon">👁️</span>
+          <span>Watchlist</span>
+        </button>
+
+        <div class="nav-section-label">Portfolio</div>
+        <button class="nav-item" data-view="portfolio">
+          <span class="nav-icon">💼</span>
+          <span>Portfolio</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button class="nav-item" onclick="checkHealth()" title="Refresh Connection">
+          <span class="nav-icon">🔄</span>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ============================================================
+         Main Content Area
+         ============================================================ -->
+    <main class="main-content">
+      <header class="main-header">
+        <div class="page-title">
+          <h2>Dashboard</h2>
+          <p>Market Overview &amp; Summary</p>
+        </div>
+        <div class="header-actions">
+          <div class="connection-status">
+            <span class="connection-dot offline"></span>
+            <span class="status-text">Checking...</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="page-content">
+
+        <!-- ========================================================
+             View: Dashboard
+             ======================================================== -->
+        <div class="page-view active" id="view-dashboard">
+          <div id="dashboard-content"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Analysis
+             ======================================================== -->
+        <div class="page-view" id="view-analysis">
+          <div class="card" style="margin-bottom:20px">
+            <div class="card-header">
+              <h3>🔍 Stock Analysis</h3>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="analysis-symbol">Stock Symbol</label>
+                <div class="input-group">
+                  <input type="text" id="analysis-symbol" placeholder="e.g., NABIL, NABBC, ADBL" class="requires-connection">
+                  <button class="btn btn-primary requires-connection" onclick="runAnalysis()">Analyze</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="analysis-result"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Backtest
+             ======================================================== -->
+        <div class="page-view" id="view-backtest">
+          <div class="card" style="margin-bottom:20px">
+            <div class="card-header">
+              <h3>⏪ Backtest Engine</h3>
+            </div>
+            <div class="form-row" style="grid-template-columns:1fr 1fr 1fr auto">
+              <div class="form-group">
+                <label for="backtest-symbol">Stock Symbol</label>
+                <input type="text" id="backtest-symbol" placeholder="e.g., NABIL" class="requires-connection">
+              </div>
+              <div class="form-group">
+                <label for="backtest-commission">Commission (%)</label>
+                <input type="number" id="backtest-commission" value="0.1" step="0.01" min="0" max="5" class="requires-connection">
+              </div>
+              <div class="form-group">
+                <label for="backtest-slippage">Slippage (%)</label>
+                <input type="number" id="backtest-slippage" value="0.5" step="0.01" min="0" max="10" class="requires-connection">
+              </div>
+              <div class="form-group" style="display:flex;align-items:flex-end">
+                <button class="btn btn-primary requires-connection" onclick="runBacktest()">Run</button>
+              </div>
+            </div>
+          </div>
+          <div id="backtest-result"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Scanner
+             ======================================================== -->
+        <div class="page-view" id="view-scanner">
+          <div class="tabs" id="scanner-tabs">
+            <button class="tab active" data-tab="top10" onclick="switchScannerTab('top10')">🏆 Top 10</button>
+            <button class="tab" data-tab="buylist" onclick="switchScannerTab('buylist')">🟢 Buy List</button>
+            <button class="tab" data-tab="selllist" onclick="switchScannerTab('selllist')">🔴 Sell List</button>
+            <button class="tab" data-tab="strongbuy" onclick="switchScannerTab('strongbuy')">💎 Strong Buy</button>
+          </div>
+          <div id="scanner-content"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Watchlist
+             ======================================================== -->
+        <div class="page-view" id="view-watchlist">
+          <div id="watchlist-content"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Portfolio
+             ======================================================== -->
+        <div class="page-view" id="view-portfolio">
+          <div id="portfolio-content"></div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
