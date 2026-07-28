@@ -1,9 +1,18 @@
 /* ============================================================
    NEPSE Quant Engine — Web UI Application
-   Single-Page Application with 6 views
+   Single-Page Application with 6 views, regime detection,
+   backtest charts, and portfolio heatmaps
    ============================================================ */
 
 const API_BASE = 'http://127.0.0.1:8000';
+
+// Global Chart.js instances for cleanup
+let equityChartInstance = null;
+let returnsChartInstance = null;
+let riskChartInstance = null;
+let pathsChartInstance = null;
+let distributionChartInstance = null;
+let varChartInstance = null;
 
 // ============================================================
 // API Client
@@ -55,6 +64,17 @@ const api = {
 
   // Portfolio
   portfolio() { return this.request('/portfolio/'); },
+
+  // Regime Detection
+  regime(symbol) {
+    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : '';
+    return this.request(`/regime/${q}`);
+  },
+
+  // Monte Carlo Simulation
+  simulate(symbol, simulations = 1000, method = 'bootstrap', confidence = 0.95) {
+    return this.request(`/simulation/${encodeURIComponent(symbol)}?simulations=${simulations}&method=${method}&confidence_level=${confidence}`);
+  },
 };
 
 // ============================================================
@@ -86,6 +106,12 @@ function escapeHtml(str) {
 function formatNumber(n, decimals = 2) {
   if (n == null || isNaN(n)) return '—';
   return Number(n).toFixed(decimals);
+}
+
+function formatPct(n, decimals = 2) {
+  if (n == null || isNaN(n)) return '—';
+  const v = Number(n);
+  return (v >= 0 ? '+' : '') + v.toFixed(decimals) + '%';
 }
 
 function signalClass(signal) {
@@ -139,20 +165,55 @@ function renderGauge(containerId, value, max, label, color = '#3b82f6') {
   const offset = circumference - (pct / 100) * circumference;
 
   container.innerHTML = `
-    <div class="gauge">
-      <svg width="140" height="140" viewBox="0 0 140 140">
-        <circle class="bg-circle" cx="70" cy="70" r="${radius}" />
-        <circle class="value-circle" cx="70" cy="70" r="${radius}"
-          stroke="${color}"
-          stroke-dasharray="${circumference}"
-          stroke-dashoffset="${offset}" />
-      </svg>
-      <div class="gauge-center">
-        <div class="gauge-value">${formatNumber(value, 0)}</div>
-        <div class="gauge-label">${escapeHtml(label)}</div>
+    <div class="gauge-container">
+      <div class="gauge">
+        <svg width="140" height="140" viewBox="0 0 140 140">
+          <circle class="bg-circle" cx="70" cy="70" r="${radius}" />
+          <circle class="value-circle" cx="70" cy="70" r="${radius}"
+            stroke="${color}"
+            stroke-dasharray="${circumference}"
+            stroke-dashoffset="${offset}" />
+        </svg>
+        <div class="gauge-center">
+          <div class="gauge-value">${formatNumber(value, 0)}</div>
+          <div class="gauge-label">${escapeHtml(label)}</div>
+        </div>
       </div>
     </div>
   `;
+}
+
+// ============================================================
+// Regime helpers
+// ============================================================
+
+const REGIME_META = {
+  BULL:           { icon: '🚀', color: '#22c55e', bg: 'rgba(34,197,94,0.12)', label: 'Bull Market' },
+  BEAR:           { icon: '🐻', color: '#ef4444', bg: 'rgba(239,68,68,0.12)', label: 'Bear Market' },
+  SIDEWAYS:       { icon: '➡️', color: '#eab308', bg: 'rgba(234,179,8,0.12)', label: 'Sideways' },
+  HIGH_VOLATILITY:{ icon: '⚡', color: '#f97316', bg: 'rgba(249,115,22,0.12)', label: 'High Volatility' },
+  LOW_VOLATILITY: { icon: '🌊', color: '#06b6d4', bg: 'rgba(6,182,212,0.12)', label: 'Low Volatility' },
+  ACCUMULATION:   { icon: '📥', color: '#a855f7', bg: 'rgba(168,85,247,0.12)', label: 'Accumulation' },
+  DISTRIBUTION:   { icon: '📤', color: '#ec4899', bg: 'rgba(236,72,153,0.12)', label: 'Distribution' },
+  RECOVERY:       { icon: '🔄', color: '#22d3ee', bg: 'rgba(34,211,238,0.12)', label: 'Recovery' },
+  PANIC:          { icon: '🔴', color: '#dc2626', bg: 'rgba(220,38,38,0.2)', label: 'Panic Selling' },
+  OVERHEATED:     { icon: '🔥', color: '#f97316', bg: 'rgba(249,115,22,0.15)', label: 'Overheated' },
+};
+
+function getRegimeMeta(regime) {
+  return REGIME_META[regime] || { icon: '❓', color: '#5a6378', bg: 'rgba(90,99,120,0.12)', label: 'Unknown' };
+}
+
+function applyRegimeStyles(el, regime) {
+  if (!el) return;
+  // Remove all regime classes
+  Object.keys(REGIME_META).forEach(r => el.classList.remove(`regime-${r}`));
+  el.classList.remove('regime-UNKNOWN');
+  if (regime && REGIME_META[regime]) {
+    el.classList.add(`regime-${regime}`);
+  } else {
+    el.classList.add('regime-UNKNOWN');
+  }
 }
 
 // ============================================================
@@ -178,6 +239,7 @@ function navigateTo(view) {
     backtest: ['Backtest Engine', 'Historical Trade Simulation'],
     scanner: ['Market Scanner', 'Stock Screening & Rankings'],
     watchlist: ['Watchlist', 'Track Your Favorite Stocks'],
+    simulator: ['Monte Carlo Simulator', 'VaR/CVaR Analysis & Portfolio Paths'],
     portfolio: ['Portfolio', 'Holdings Analysis & P&L'],
   };
   const [title, subtitle] = titles[view] || ['', ''];
@@ -220,9 +282,69 @@ async function checkHealth() {
 }
 
 // ============================================================
+// Regime Detection (loaded on every dashboard visit)
+// ============================================================
+
+let lastRegimeData = null;
+
+async function loadRegime() {
+  const pill = $('#regime-pill');
+  const hero = $('#regime-hero');
+  if (!pill || !hero) return;
+
+  try {
+    const data = await api.regime();
+    lastRegimeData = data;
+    renderRegimePill(data, pill);
+    renderRegimeHero(data, hero);
+  } catch (err) {
+    pill.classList.add('hidden');
+    hero.classList.add('hidden');
+  }
+}
+
+function renderRegimePill(data, pill) {
+  const meta = getRegimeMeta(data.regime);
+  pill.classList.remove('hidden');
+  applyRegimeStyles(pill, data.regime);
+
+  const dot = pill.querySelector('.regime-dot');
+  const label = pill.querySelector('.regime-label');
+  if (dot) dot.style.background = meta.color;
+  if (label) label.textContent = `${meta.icon} ${meta.label} (${formatNumber(data.confidence, 0)}%)`;
+}
+
+function renderRegimeHero(data, hero) {
+  const meta = getRegimeMeta(data.regime);
+  hero.classList.remove('hidden');
+  applyRegimeStyles(hero, data.regime);
+
+  hero.querySelector('.regime-hero-icon').textContent = meta.icon;
+  hero.querySelector('.regime-hero-label').textContent = meta.label;
+
+  hero.querySelector('.regime-confidence').textContent = formatNumber(data.confidence, 1) + '%';
+  hero.querySelector('.regime-trend').textContent = formatNumber(data.trend_strength, 1);
+  hero.querySelector('.regime-volatility').textContent = formatNumber(data.volatility * 100, 2) + '%';
+  hero.querySelector('.regime-symbol').textContent = data.symbol || '—';
+
+  // Reasons
+  const reasonsEl = hero.querySelector('.regime-hero-reasons');
+  if (data.reasons && data.reasons.length > 0) {
+    reasonsEl.innerHTML = data.reasons.map(r =>
+      `<div class="regime-hero-reason">${escapeHtml(r)}</div>`
+    ).join('');
+  } else {
+    reasonsEl.innerHTML = '<div class="regime-hero-reason" style="color:var(--text-muted)">No specific reasons available</div>';
+  }
+}
+
+// ============================================================
 // Dashboard View
 // ============================================================
 async function loadDashboard() {
+  // Load regime detection
+  loadRegime();
+
   showLoading('dashboard-content');
   try {
     const summary = await api.marketSummary();
@@ -337,7 +459,7 @@ function renderAnalysis(data) {
   const confidence = data.confidence || 0;
 
   // Determine gauge color
-  let gaugeColor = '#eab308'; // HOLD yellow
+  let gaugeColor = '#eab308';
   if (signal === 'BUY') gaugeColor = '#22c55e';
   else if (signal === 'SELL') gaugeColor = '#ef4444';
 
@@ -435,7 +557,7 @@ $('#analysis-symbol')?.addEventListener('keydown', (e) => {
 });
 
 // ============================================================
-// Backtest View
+// Backtest View — with charts
 // ============================================================
 async function runBacktest() {
   const symbol = $('#backtest-symbol').value.trim().toUpperCase();
@@ -444,8 +566,13 @@ async function runBacktest() {
 
   if (!symbol) { showToast('Please enter a stock symbol', 'error'); return; }
 
-  const container = $('#backtest-result');
+  const chartsEl = $('#backtest-charts');
+  const resultEl = $('#backtest-result');
   showLoading('backtest-result');
+  if (chartsEl) chartsEl.classList.add('hidden');
+
+  // Destroy old chart instances
+  destroyCharts();
 
   try {
     const data = await api.backtest(symbol, commission, slippage);
@@ -453,6 +580,15 @@ async function runBacktest() {
   } catch (err) {
     showError('backtest-result', err.message);
   }
+}
+
+function destroyCharts() {
+  if (equityChartInstance) { equityChartInstance.destroy(); equityChartInstance = null; }
+  if (returnsChartInstance) { returnsChartInstance.destroy(); returnsChartInstance = null; }
+  if (riskChartInstance) { riskChartInstance.destroy(); riskChartInstance = null; }
+  if (pathsChartInstance) { pathsChartInstance.destroy(); pathsChartInstance = null; }
+  if (distributionChartInstance) { distributionChartInstance.destroy(); distributionChartInstance = null; }
+  if (varChartInstance) { varChartInstance.destroy(); varChartInstance = null; }
 }
 
 function renderBacktest(data) {
@@ -463,7 +599,6 @@ function renderBacktest(data) {
   const report = data.report || {};
   const trades = data.trades || [];
 
-  // Metrics
   const isGood = metrics.win_rate >= 50;
 
   let tradeRows = '';
@@ -562,11 +697,570 @@ function renderBacktest(data) {
       </div>
     </div>
   `;
+
+  // Render charts if we have trades
+  if (trades.length > 0) {
+    renderBacktestCharts(trades, metrics);
+  }
+}
+
+function renderBacktestCharts(trades, metrics) {
+  const chartsEl = $('#backtest-charts');
+  if (!chartsEl) return;
+  chartsEl.classList.remove('hidden');
+
+  // Build equity curve data from cumulative returns
+  let cumulative = 1.0;
+  const labels = [];
+  const equityData = [];
+  const returnData = [];
+
+  trades.forEach((t, i) => {
+    labels.push(t.date ? t.date.substring(0, 10) : `Trade ${i + 1}`);
+    cumulative *= (1 + (t.return_pct || 0) / 100);
+    equityData.push(+(cumulative * 100 - 100).toFixed(2));
+    returnData.push(+(t.return_pct || 0));
+  });
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { color: '#8892a8', font: { family: 'Inter', size: 11 } },
+      },
+      tooltip: {
+        backgroundColor: '#1a1f2e',
+        titleColor: '#e8edf5',
+        bodyColor: '#8892a8',
+        borderColor: '#2a3548',
+        borderWidth: 1,
+        cornerRadius: 6,
+        padding: 10,
+      },
+    },
+    scales: {
+      x: {
+        ticks: { color: '#5a6378', font: { size: 10 } },
+        grid: { color: 'rgba(30,41,59,0.5)' },
+      },
+      y: {
+        ticks: { color: '#5a6378', font: { size: 10 } },
+        grid: { color: 'rgba(30,41,59,0.5)' },
+      },
+    },
+  };
+
+  // Equity curve chart
+  const equityCtx = document.getElementById('equity-curve-chart');
+  if (equityCtx) {
+    if (equityChartInstance) equityChartInstance.destroy();
+    const isFinalPositive = equityData[equityData.length - 1] >= 0;
+    const gradient = equityCtx.getContext('2d').createLinearGradient(0, 0, 0, 250);
+    gradient.addColorStop(0, isFinalPositive ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)');
+    gradient.addColorStop(1, isFinalPositive ? 'rgba(34,197,94,0)' : 'rgba(239,68,68,0)');
+
+    equityChartInstance = new Chart(equityCtx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Cumulative Return %',
+          data: equityData,
+          borderColor: isFinalPositive ? '#22c55e' : '#ef4444',
+          backgroundColor: gradient,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 2,
+          pointHoverRadius: 5,
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        ...chartOptions,
+        plugins: {
+          ...chartOptions.plugins,
+          legend: { display: false },
+        },
+      },
+    });
+  }
+
+  // Individual returns bar chart
+  const retCtx = document.getElementById('returns-chart');
+  if (retCtx) {
+    if (returnsChartInstance) returnsChartInstance.destroy();
+    returnsChartInstance = new Chart(retCtx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Trade Return %',
+          data: returnData,
+          backgroundColor: returnData.map(v => v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+          borderColor: returnData.map(v => v >= 0 ? '#22c55e' : '#ef4444'),
+          borderWidth: 1,
+          borderRadius: 3,
+        }],
+      },
+      options: {
+        ...chartOptions,
+        plugins: {
+          ...chartOptions.plugins,
+          legend: { display: false },
+        },
+        scales: {
+          ...chartOptions.scales,
+          y: {
+            ...chartOptions.scales.y,
+            beginAtZero: true,
+          },
+        },
+      },
+    });
+  }
 }
 
 // Enter key for backtest
 $('#backtest-symbol')?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') runBacktest();
+});
+
+// ============================================================
+// Monte Carlo Simulator View
+// ============================================================
+
+async function runSimulation() {
+  const symbol = $('#sim-symbol').value.trim().toUpperCase();
+  if (!symbol) { showToast('Please enter a stock symbol', 'error'); return; }
+
+  const simulations = parseInt($('#sim-count').value) || 1000;
+  const method = $('#sim-method').value;
+  const confidence = parseFloat($('#sim-confidence').value) || 0.95;
+
+  const chartsEl = $('#simulation-charts');
+  const resultEl = $('#simulation-result');
+  showLoading('simulation-result');
+  if (chartsEl) chartsEl.classList.add('hidden');
+
+  // Destroy old chart instances
+  destroyCharts();
+
+  try {
+    showToast(`Running ${simulations.toLocaleString()} simulations via ${method}...`, 'info');
+    const data = await api.simulate(symbol, simulations, method, confidence);
+    renderSimulation(data);
+  } catch (err) {
+    showError('simulation-result', err.message);
+  }
+}
+
+function renderSimulation(data) {
+  const container = $('#simulation-result');
+  if (!container) return;
+
+  const summary = data.summary || {};
+  const curves = data.equity_curves || [];
+  const bestCurve = data.best_equity || [];
+  const worstCurve = data.worst_equity || [];
+  const avgCurve = data.average_equity || [];
+
+  // Clear any old content first
+  container.innerHTML = '';
+
+  // Show charts section
+  const chartsEl = $('#simulation-charts');
+  if (chartsEl) chartsEl.classList.remove('hidden');
+
+  // Render metrics
+  renderSimMetrics(summary, data);
+
+  // Render percentile table
+  renderPercentileTable(summary);
+
+  // Render charts
+  renderPathChart(curves, bestCurve, worstCurve, avgCurve, data.symbol);
+  renderDistributionChart(summary);
+  renderVarChart(summary);
+}
+
+function renderSimMetrics(summary, data) {
+  const container = $('#simulation-metrics');
+  if (!container) return;
+
+  const probProfit = summary.probability_of_profit || 0;
+  const probLoss = summary.probability_of_loss || 0;
+  const probRuin = summary.probability_of_ruin || 0;
+  const var95 = summary.value_at_risk_95 || 0;
+  const cvar95 = summary.conditional_var_95 || 0;
+  const meanRet = summary.mean_return || 0;
+  const medianRet = summary.median_return || 0;
+  const bestRet = summary.best_return || 0;
+  const worstRet = summary.worst_return || 0;
+  const meanDD = summary.mean_drawdown || 0;
+  const maxDD = summary.max_drawdown || 0;
+  const ci = summary.confidence_interval || {};
+
+  const formatMoney = v => (v >= 0 ? '+' : '') + 'NPR ' + formatNumber(Math.abs(v));
+
+  container.innerHTML = `
+    <div class="simulator-metric ${probProfit >= 70 ? 'good' : probProfit >= 40 ? 'warn' : 'bad'}">
+      <div class="metric-value">${formatNumber(probProfit, 1)}%</div>
+      <div class="metric-label">Prob. of Profit</div>
+      <div class="metric-sub">${formatNumber(probLoss, 1)}% loss probability</div>
+    </div>
+    <div class="simulator-metric ${probRuin < 5 ? 'good' : probRuin < 20 ? 'warn' : 'bad'}">
+      <div class="metric-value">${formatNumber(probRuin, 1)}%</div>
+      <div class="metric-label">Prob. of Ruin</div>
+      <div class="metric-sub">>50% drawdown risk</div>
+    </div>
+    <div class="simulator-metric ${var95 >= 0 ? 'good' : 'bad'}">
+      <div class="metric-value">${formatMoney(var95)}</div>
+      <div class="metric-label">VaR (95%)</div>
+      <div class="metric-sub">5th percentile ending equity</div>
+    </div>
+    <div class="simulator-metric ${cvar95 >= 0 ? 'good' : 'bad'}">
+      <div class="metric-value">${formatMoney(cvar95)}</div>
+      <div class="metric-label">CVaR (95%)</div>
+      <div class="metric-sub">Expected shortfall</div>
+    </div>
+    <div class="simulator-metric info">
+      <div class="metric-value">${formatNumber(data.simulations_run || 0, 0)}</div>
+      <div class="metric-label">Simulations</div>
+      <div class="metric-sub">${data.method} · ${data.total_trades || 0} trades</div>
+    </div>
+    <div class="simulator-metric info">
+      <div class="metric-value">${data.symbol}</div>
+      <div class="metric-label">Stock</div>
+      <div class="metric-sub">${data.method} method</div>
+    </div>
+    <div class="simulator-metric neutral">
+      <div class="metric-value">${formatMoney(meanRet)}</div>
+      <div class="metric-label">Mean Return</div>
+      <div class="metric-sub">Median: ${formatMoney(medianRet)}</div>
+    </div>
+    <div class="simulator-metric neutral">
+      <div class="metric-value">${formatMoney(bestRet)}</div>
+      <div class="metric-label">Best / Worst</div>
+      <div class="metric-sub">${formatMoney(worstRet)} worst</div>
+    </div>
+    <div class="simulator-metric ${meanDD < 20 ? 'good' : meanDD < 40 ? 'warn' : 'bad'}">
+      <div class="metric-value">${formatNumber(meanDD, 1)}%</div>
+      <div class="metric-label">Mean Drawdown</div>
+      <div class="metric-sub">Max: ${formatNumber(maxDD, 1)}%</div>
+    </div>
+    <div class="simulator-metric info">
+      <div class="metric-value">${formatMoney(ci.lower || 0)}</div>
+      <div class="metric-label">CI Lower (${formatNumber((data.confidence_level || 0.95) * 100, 0)}%)</div>
+      <div class="metric-sub">Upper: ${formatMoney(ci.upper || 0)}</div>
+    </div>
+  `;
+}
+
+function renderPercentileTable(summary) {
+  const container = $('#percentile-table');
+  if (!container) return;
+
+  const pcts = summary.percentiles || {};
+  const labels = ['p5', 'p10', 'p25', 'p50', 'p75', 'p90', 'p95', 'p99'];
+  const displayLabels = ['5th', '10th', '25th', '50th', '75th', '90th', '95th', '99th'];
+
+  const values = labels.map(l => pcts[l] || 0);
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const range = maxVal - minVal || 1;
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Percentile</th>
+          <th style="width:50%">Distribution</th>
+          <th>Value (NPR)</th>
+          <th>Outlook</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${labels.map((key, i) => {
+          const val = pcts[key] || 0;
+          const isPos = val >= 0;
+          const barWidth = Math.max(((val - minVal) / range) * 100, 2);
+          return `<tr>
+            <td><strong>${displayLabels[i]}</strong></td>
+            <td>
+              <div style="height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:${barWidth}%;background:${isPos ? '#22c55e' : '#ef4444'};border-radius:4px;transition:width 0.5s ease"></div>
+              </div>
+            </td>
+            <td style="font-family:'JetBrains Mono',monospace;font-weight:600;color:${isPos ? 'var(--accent-green)' : 'var(--accent-red)'}">NPR ${formatNumber(val)}</td>
+            <td><span class="signal-badge ${isPos ? 'buy' : (val < 0 ? 'sell' : 'hold')}">${isPos ? 'Profit' : (val < 0 ? 'Loss' : 'Break-even')}</span></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderPathChart(curves, bestCurve, worstCurve, avgCurve, symbol) {
+  const ctx = document.getElementById('paths-chart');
+  if (!ctx) return;
+
+  if (pathsChartInstance) pathsChartInstance.destroy();
+
+  const datasets = [];
+  const colors = [
+    'rgba(59,130,246,0.08)', 'rgba(139,92,246,0.08)', 'rgba(34,197,94,0.08)',
+    'rgba(249,115,22,0.08)', 'rgba(236,72,153,0.08)', 'rgba(6,182,212,0.08)',
+    'rgba(234,179,8,0.08)', 'rgba(168,85,247,0.08)',
+  ];
+
+  // Add sampled simulation paths (faded)
+  curves.forEach((curve, i) => {
+    if (curve.length < 2) return;
+    // Create a time axis (trade number)
+    const data = curve.map((v, j) => ({ x: j, y: +v.toFixed(2) }));
+    datasets.push({
+      label: `Path ${i + 1}`,
+      data,
+      borderColor: colors[i % colors.length],
+      borderWidth: 0.5,
+      pointRadius: 0,
+      tension: 0.1,
+      showLine: true,
+    });
+  });
+
+  // Add best curve
+  if (bestCurve.length >= 2) {
+    const bestData = bestCurve.map((v, j) => ({ x: j, y: +v.toFixed(2) }));
+    datasets.push({
+      label: 'Best Path',
+      data: bestData,
+      borderColor: '#22c55e',
+      borderWidth: 2.5,
+      pointRadius: 0,
+      tension: 0.2,
+      showLine: true,
+    });
+  }
+
+  // Add worst curve
+  if (worstCurve.length >= 2) {
+    const worstData = worstCurve.map((v, j) => ({ x: j, y: +v.toFixed(2) }));
+    datasets.push({
+      label: 'Worst Path',
+      data: worstData,
+      borderColor: '#ef4444',
+      borderWidth: 2.5,
+      pointRadius: 0,
+      tension: 0.2,
+      showLine: true,
+    });
+  }
+
+  // Add average curve
+  if (avgCurve.length >= 2) {
+    const avgData = avgCurve.map((v, j) => ({ x: j, y: +v.toFixed(2) }));
+    datasets.push({
+      label: 'Average Path',
+      data: avgData,
+      borderColor: '#eab308',
+      borderWidth: 2.5,
+      pointRadius: 0,
+      tension: 0.2,
+      borderDash: [6, 3],
+      showLine: true,
+    });
+  }
+
+  pathsChartInstance = new Chart(ctx, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 800 },
+      plugins: {
+        legend: {
+          labels: { color: '#8892a8', font: { family: 'Inter', size: 10 } },
+        },
+        tooltip: {
+          backgroundColor: '#1a1f2e',
+          titleColor: '#e8edf5',
+          bodyColor: '#8892a8',
+          borderColor: '#2a3548',
+          borderWidth: 1,
+          cornerRadius: 6,
+          padding: 10,
+          mode: 'index',
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Trade Number', color: '#5a6378', font: { size: 10 } },
+          ticks: { color: '#5a6378', font: { size: 9 } },
+          grid: { color: 'rgba(30,41,59,0.3)' },
+        },
+        y: {
+          title: { display: true, text: 'Portfolio Value (NPR)', color: '#5a6378', font: { size: 10 } },
+          ticks: { color: '#5a6378', font: { size: 9 } },
+          grid: { color: 'rgba(30,41,59,0.3)' },
+        },
+      },
+      elements: {
+        point: { radius: 0 },
+      },
+    },
+  });
+}
+
+function renderDistributionChart(summary) {
+  const ctx = document.getElementById('distribution-chart');
+  if (!ctx) return;
+
+  if (distributionChartInstance) distributionChartInstance.destroy();
+
+  // Generate histogram bins from percentile data
+  const pcts = summary.percentiles || {};
+  const binLabels = ['≤p5', 'p5-p10', 'p10-p25', 'p25-p50', 'p50-p75', 'p75-p90', 'p90-p95', 'p95-p99', '≥p99'];
+  const binProbabilities = [5, 5, 15, 25, 25, 15, 5, 4, 1];
+
+  // Approximate bin centers from percentiles
+  const bins = [
+    pcts.p5 || 0,
+    (pcts.p5 + pcts.p10) / 2 || 0,
+    (pcts.p10 + pcts.p25) / 2 || 0,
+    (pcts.p25 + pcts.p50) / 2 || 0,
+    (pcts.p50 + pcts.p75) / 2 || 0,
+    (pcts.p75 + pcts.p90) / 2 || 0,
+    (pcts.p90 + pcts.p95) / 2 || 0,
+    (pcts.p95 + pcts.p99) / 2 || 0,
+    pcts.p99 || 0,
+  ];
+
+  distributionChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: binLabels,
+      datasets: [{
+        label: 'Probability %',
+        data: binProbabilities,
+        backgroundColor: bins.map(v => v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+        borderColor: bins.map(v => v >= 0 ? '#22c55e' : '#ef4444'),
+        borderWidth: 1,
+        borderRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1f2e',
+          titleColor: '#e8edf5',
+          bodyColor: '#8892a8',
+          borderColor: '#2a3548',
+          borderWidth: 1,
+          cornerRadius: 6,
+          padding: 10,
+          callbacks: {
+            afterLabel: function(context) {
+              const val = bins[context.dataIndex];
+              return `Approx. equity: NPR ${formatNumber(val)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#5a6378', font: { size: 9 }, maxRotation: 45 },
+          grid: { display: false },
+        },
+        y: {
+          title: { display: true, text: 'Probability (%)', color: '#5a6378', font: { size: 10 } },
+          ticks: { color: '#5a6378', font: { size: 9 } },
+          grid: { color: 'rgba(30,41,59,0.3)' },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+function renderVarChart(summary) {
+  const ctx = document.getElementById('var-chart');
+  if (!ctx) return;
+
+  if (varChartInstance) varChartInstance.destroy();
+
+  const var95 = summary.value_at_risk_95 || 0;
+  const cvar95 = summary.conditional_var_95 || 0;
+  const meanRet = summary.mean_return || 0;
+  const probProfit = summary.probability_of_profit || 0;
+
+  // Build a simple waterfall-style visualization of risk metrics
+  const labels = ['VaR (95%)', 'CVaR (95%)', 'Mean Return', 'Best Case'];
+  const values = [var95, cvar95, meanRet, summary.best_return || 0];
+
+  varChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Ending Equity (NPR)',
+        data: values,
+        backgroundColor: values.map(v => {
+          if (v >= 0) return 'rgba(34,197,94,0.7)';
+          return 'rgba(239,68,68,0.7)';
+        }),
+        borderColor: values.map(v => {
+          if (v >= 0) return '#22c55e';
+          return '#ef4444';
+        }),
+        borderWidth: 2,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1f2e',
+          titleColor: '#e8edf5',
+          bodyColor: '#8892a8',
+          borderColor: '#2a3548',
+          borderWidth: 1,
+          cornerRadius: 6,
+          padding: 10,
+          callbacks: {
+            label: function(context) {
+              const val = context.parsed.y;
+              return `NPR ${formatNumber(val)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#5a6378', font: { size: 10 } },
+          grid: { display: false },
+        },
+        y: {
+          title: { display: true, text: 'Equity (NPR)', color: '#5a6378', font: { size: 10 } },
+          ticks: { color: '#5a6378', font: { size: 9 } },
+          grid: { color: 'rgba(30,41,59,0.3)' },
+        },
+      },
+    },
+  });
+}
+
+// Enter key for simulator
+$('#sim-symbol')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runSimulation();
 });
 
 // ============================================================
@@ -609,7 +1303,6 @@ function renderScannerList(container, data, tab) {
   const stocks = Array.isArray(data) ? data : [];
   let rows = '';
   stocks.forEach((stock, i) => {
-    const hasPositionSizing = stock.position_size;
     rows += `
       <tr onclick="quickAnalyze('${escapeHtml(stock.symbol)}')" style="cursor:pointer">
         <td><strong>#${i + 1}</strong></td>
@@ -819,11 +1512,16 @@ function renderWatchlistScan(data) {
 }
 
 // ============================================================
-// Portfolio View
+// Portfolio View — with heatmap
 // ============================================================
 async function loadPortfolio() {
   const container = $('#portfolio-content');
   showLoading('portfolio-content');
+
+  // Hide heatmap until data loads
+  const heatmap = $('#portfolio-heatmap');
+  if (heatmap) heatmap.classList.add('hidden');
+
   try {
     const data = await api.portfolio();
     renderPortfolio(data);
@@ -841,6 +1539,23 @@ function renderPortfolio(data) {
   const isPositive = pnl >= 0;
 
   const holdings = data.holdings || [];
+
+  // Build sector heatmap from holdings
+  const sectorMap = {};
+  holdings.forEach(h => {
+    const sector = h.sector || 'Others';
+    if (!sectorMap[sector]) {
+      sectorMap[sector] = { totalInvested: 0, totalValue: 0, count: 0, pnl: 0 };
+    }
+    sectorMap[sector].totalInvested += (h.average_price || 0) * (h.quantity || 0);
+    sectorMap[sector].totalValue += (h.ltp || 0) * (h.quantity || 0);
+    sectorMap[sector].count += 1;
+    sectorMap[sector].pnl += (h.pnl || 0);
+  });
+
+  // Render heatmap if we have data
+  renderPortfolioHeatmap(sectorMap, data.portfolio_cost || 0);
+
   let rows = '';
   if (holdings.length === 0) {
     rows = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No holdings in portfolio</td></tr>';
@@ -908,6 +1623,121 @@ function renderPortfolio(data) {
       </div>
     </div>
   `;
+}
+
+function renderPortfolioHeatmap(sectorMap, totalInvested) {
+  const heatmapEl = $('#portfolio-heatmap');
+  if (!heatmapEl) return;
+
+  const sectors = Object.keys(sectorMap);
+  if (sectors.length === 0) {
+    heatmapEl.classList.add('hidden');
+    return;
+  }
+
+  heatmapEl.classList.remove('hidden');
+
+  // Sector allocation heatmap (horizontal bars)
+  const sectorContainer = $('#sector-heatmap');
+  if (!sectorContainer) return;
+
+  // Sort sectors by invested amount descending
+  const sortedSectors = sectors.sort((a, b) => sectorMap[b].totalInvested - sectorMap[a].totalInvested);
+  const maxInvested = Math.max(...sortedSectors.map(s => sectorMap[s].totalInvested));
+
+  // Color palette for sectors
+  const sectorColors = [
+    'rgba(59,130,246,0.85)',   // blue
+    'rgba(139,92,246,0.85)',   // purple
+    'rgba(34,197,94,0.85)',    // green
+    'rgba(249,115,22,0.85)',   // orange
+    'rgba(236,72,153,0.85)',   // pink
+    'rgba(6,182,212,0.85)',    // cyan
+    'rgba(234,179,8,0.85)',    // yellow
+    'rgba(239,68,68,0.85)',    // red
+    'rgba(168,85,247,0.85)',   // violet
+    'rgba(20,184,166,0.85)',   // teal
+  ];
+
+  let barsHtml = '';
+  sortedSectors.forEach((sector, i) => {
+    const data = sectorMap[sector];
+    const pct = maxInvested > 0 ? (data.totalInvested / maxInvested) * 100 : 0;
+    const allocPct = totalInvested > 0 ? (data.totalInvested / totalInvested) * 100 : 0;
+    const color = sectorColors[i % sectorColors.length];
+    const isPnlPositive = data.pnl >= 0;
+
+    barsHtml += `
+      <div class="heatmap-row">
+        <div class="heatmap-label">${escapeHtml(sector)}</div>
+        <div class="heatmap-bar-wrapper">
+          <div class="heatmap-bar" style="width:${pct}%;background:${color}">
+            ${pct > 20 ? `NPR ${formatNumber(data.totalInvested)}` : ''}
+          </div>
+        </div>
+        <div class="heatmap-value" style="color:${isPnlPositive ? 'var(--accent-green)' : 'var(--accent-red)'}">
+          ${formatNumber(allocPct, 1)}%
+          <span style="font-size:10px;color:var(--text-muted);font-weight:400">(${data.count})</span>
+        </div>
+      </div>
+    `;
+  });
+
+  sectorContainer.innerHTML = barsHtml;
+
+  // Risk contribution pie chart
+  const riskCtx = document.getElementById('risk-contribution-chart');
+  if (riskCtx) {
+    if (riskChartInstance) riskChartInstance.destroy();
+
+    const riskColors = sortedSectors.map((_, i) => sectorColors[i % sectorColors.length]);
+    const riskValues = sortedSectors.map(s => sectorMap[s].totalInvested);
+
+    riskChartInstance = new Chart(riskCtx, {
+      type: 'doughnut',
+      data: {
+        labels: sortedSectors,
+        datasets: [{
+          data: riskValues,
+          backgroundColor: riskColors.map(c => c.replace('0.85', '0.7')),
+          borderColor: riskColors,
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: {
+              color: '#8892a8',
+              font: { family: 'Inter', size: 11 },
+              padding: 12,
+              usePointStyle: true,
+              pointStyle: 'circle',
+            },
+          },
+          tooltip: {
+            backgroundColor: '#1a1f2e',
+            titleColor: '#e8edf5',
+            bodyColor: '#8892a8',
+            borderColor: '#2a3548',
+            borderWidth: 1,
+            cornerRadius: 6,
+            padding: 10,
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const pct = total > 0 ? ((context.parsed / total) * 100).toFixed(1) : 0;
+                return ` ${context.label}: NPR ${formatNumber(context.parsed)} (${pct}%)`;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
 }
 
 // ============================================================

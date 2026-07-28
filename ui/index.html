@@ -6,9 +6,10 @@
   <title>NEPSE Quant Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="app-layout">
@@ -52,6 +53,10 @@
         </button>
 
         <div class="nav-section-label">Portfolio</div>
+        <button class="nav-item" data-view="simulator">
+          <span class="nav-icon">🎲</span>
+          <span>Simulator</span>
+        </button>
         <button class="nav-item" data-view="portfolio">
           <span class="nav-icon">💼</span>
           <span>Portfolio</span>
@@ -76,6 +81,10 @@
           <p>Market Overview &amp; Summary</p>
         </div>
         <div class="header-actions">
+          <div id="regime-pill" class="regime-pill hidden">
+            <span class="regime-dot"></span>
+            <span class="regime-label">—</span>
+          </div>
           <div class="connection-status">
             <span class="connection-dot offline"></span>
             <span class="status-text">Checking...</span>
@@ -89,6 +98,33 @@
              View: Dashboard
              ======================================================== -->
         <div class="page-view active" id="view-dashboard">
+          <!-- Regime Hero -->
+          <div id="regime-hero" class="regime-hero hidden">
+            <div class="regime-hero-badge">
+              <span class="regime-hero-icon"></span>
+              <span class="regime-hero-label"></span>
+            </div>
+            <div class="regime-hero-metrics">
+              <div class="regime-hero-metric">
+                <span class="metric-label">Confidence</span>
+                <span class="metric-value regime-confidence"></span>
+              </div>
+              <div class="regime-hero-metric">
+                <span class="metric-label">Trend</span>
+                <span class="metric-value regime-trend"></span>
+              </div>
+              <div class="regime-hero-metric">
+                <span class="metric-label">Volatility</span>
+                <span class="metric-value regime-volatility"></span>
+              </div>
+              <div class="regime-hero-metric">
+                <span class="metric-label">Symbol</span>
+                <span class="metric-value regime-symbol"></span>
+              </div>
+            </div>
+            <div class="regime-hero-reasons"></div>
+          </div>
+
           <div id="dashboard-content"></div>
         </div>
 
@@ -139,6 +175,20 @@
               </div>
             </div>
           </div>
+          <div id="backtest-charts" class="content-grid hidden" style="margin-bottom:20px">
+            <div class="card chart-card">
+              <div class="card-header"><h3>📈 Equity Curve</h3></div>
+              <div class="chart-wrapper">
+                <canvas id="equity-curve-chart"></canvas>
+              </div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-header"><h3>📉 Trade Returns</h3></div>
+              <div class="chart-wrapper">
+                <canvas id="returns-chart"></canvas>
+              </div>
+            </div>
+          </div>
           <div id="backtest-result"></div>
         </div>
 
@@ -163,9 +213,102 @@
         </div>
 
         <!-- ========================================================
+             View: Simulator (Monte Carlo)
+             ======================================================== -->
+        <div class="page-view" id="view-simulator">
+          <div class="card simulator-controls" style="margin-bottom:20px">
+            <div class="card-header">
+              <h3>🎲 Monte Carlo Simulator</h3>
+            </div>
+            <div class="form-row" style="grid-template-columns:1fr 1fr 1fr 1fr auto">
+              <div class="form-group">
+                <label for="sim-symbol">Stock Symbol</label>
+                <input type="text" id="sim-symbol" placeholder="e.g., NABIL" class="requires-connection">
+              </div>
+              <div class="form-group">
+                <label for="sim-count">Simulations</label>
+                <select id="sim-count" class="requires-connection">
+                  <option value="500">500</option>
+                  <option value="1000" selected>1,000</option>
+                  <option value="2500">2,500</option>
+                  <option value="5000">5,000</option>
+                  <option value="10000">10,000</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="sim-method">Method</label>
+                <select id="sim-method" class="requires-connection">
+                  <option value="bootstrap">Bootstrap</option>
+                  <option value="shuffle">Shuffle</option>
+                  <option value="returns">Returns</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="sim-confidence">Confidence</label>
+                <select id="sim-confidence" class="requires-connection">
+                  <option value="0.90">90%</option>
+                  <option value="0.95" selected>95%</option>
+                  <option value="0.99">99%</option>
+                </select>
+              </div>
+              <div class="form-group" style="display:flex;align-items:flex-end">
+                <button class="btn btn-primary requires-connection" onclick="runSimulation()">🚀 Run</button>
+              </div>
+            </div>
+          </div>
+          <div id="simulation-charts" class="hidden">
+            <div class="content-grid" style="margin-bottom:20px">
+              <div class="card chart-card">
+                <div class="card-header"><h3>📈 Portfolio Paths</h3></div>
+                <div class="chart-wrapper">
+                  <canvas id="paths-chart"></canvas>
+                </div>
+              </div>
+              <div class="card chart-card">
+                <div class="card-header"><h3>📊 Final Equity Distribution</h3></div>
+                <div class="chart-wrapper">
+                  <canvas id="distribution-chart"></canvas>
+                </div>
+              </div>
+            </div>
+            <div class="content-grid" style="margin-bottom:20px">
+              <div class="card chart-card">
+                <div class="card-header"><h3>⚠️ VaR / CVaR Visualization</h3></div>
+                <div class="chart-wrapper">
+                  <canvas id="var-chart"></canvas>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>📋 Risk Metrics</h3></div>
+                <div id="simulation-metrics" class="metrics-grid" style="grid-template-columns:1fr 1fr"></div>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom:20px">
+              <div class="card-header"><h3>📐 Percentile Table</h3></div>
+              <div id="percentile-table" class="table-container"></div>
+            </div>
+          </div>
+          <div id="simulation-result"></div>
+        </div>
+
+        <!-- ========================================================
              View: Portfolio
              ======================================================== -->
         <div class="page-view" id="view-portfolio">
+          <div id="portfolio-heatmap" class="heatmap-section hidden">
+            <div class="content-grid two">
+              <div class="card chart-card">
+                <div class="card-header"><h3>🔲 Sector Allocation</h3></div>
+                <div id="sector-heatmap" class="heatmap-container"></div>
+              </div>
+              <div class="card chart-card">
+                <div class="card-header"><h3>📊 Risk Contribution</h3></div>
+                <div class="chart-wrapper">
+                  <canvas id="risk-contribution-chart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
           <div id="portfolio-content"></div>
         </div>
 

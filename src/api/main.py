@@ -8,7 +8,9 @@ from src.api.analyze import router as analyze_router
 from src.api.backtest import router as backtest_router
 from src.api.health import router as health_router
 from src.api.portfolio import router as portfolio_router
+from src.api.regime import router as regime_router
 from src.api.scanner import router as scanner_router
+from src.api.simulation import router as simulation_router
 from src.api.watchlist import router as watchlist_router
 
 app = FastAPI(
@@ -37,6 +39,18 @@ app.include_router(
     scanner_router,
     prefix="/market",
     tags=["Market Scanner"],
+)
+
+# Regime Detection
+app.include_router(
+    regime_router,
+    tags=["Regime Detection"],
+)
+
+# Monte Carlo Simulation
+app.include_router(
+    simulation_router,
+    tags=["Monte Carlo Simulation"],
 )
 
 # Backtest Engine
