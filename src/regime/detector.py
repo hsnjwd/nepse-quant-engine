@@ -305,17 +305,6 @@ class MarketRegimeDetector:
             if len(atr_series) > 1
             else 0.5
         )
-        # ATR as percentage of Close — catches volatility spikes even when
-        # absolute ATR is compressed by falling prices (e.g. crash / panic).
-        close_safe = df["Close"].replace(0, float("nan"))
-        atr_pct_series = df["ATR"] / close_safe
-        atr_pct_series = atr_pct_series.dropna()
-        atr_pct_percentile: float = (
-            float(atr_pct_series.rank(pct=True).iloc[-1])
-            if len(atr_pct_series) > 1
-            else 0.5
-        )
-
         sma20: float = self._safe_float(latest, "SMA_20")
         sma50: float = self._safe_float(latest, "SMA_50")
 
@@ -356,11 +345,6 @@ class MarketRegimeDetector:
         lr = cs.pct_change().dropna() if len(cs) > 1 else pd.Series(dtype=float)
         vol_20: float = float(lr.tail(20).std()) if len(lr) >= 20 else 0.0
 
-        # Volume spike
-        volume_spike: bool = self._detect_volume_spike(
-            df, multiplier=self._volume_spike_multiplier,
-        )
-
         # Volume slope (from smoothed VOLUME_MA) — distinguishes genuine
         # accumulation/distribution from random OBV drift on sideways data.
         vma_series = df["VOLUME_MA"].dropna()
@@ -397,38 +381,49 @@ class MarketRegimeDetector:
         metrics["return_5d"] = returns_5
         metrics["return_20d"] = returns_20
         metrics["volatility_20d"] = vol_20
-        metrics["volume_spike"] = 1.0 if volume_spike else 0.0
+        metrics["trend"] = ma_slope
+
+        # Drawdown from 252-day rolling high
+        rolling_max = df["Close"].rolling(window=252, min_periods=20).max()
+        current_max = rolling_max.iloc[-1]
+        metrics["drawdown"] = (current_max - close_val) / current_max if current_max > 0 else 0.0
+
+        # Volume spike — compare to overall average for robust spike detection
+        # during extended crashes where 20-period MA inflates
+        vol_series = df["Volume"].dropna()
+        if len(vol_series) < 2:
+            metrics["volume_spike"] = 0.0
+        else:
+            overall_avg_vol = vol_series.mean()
+            metrics["volume_spike"] = (
+                1.0 if (overall_avg_vol > 0 and vol_series.iloc[-1] >= overall_avg_vol * 1.5)
+                else 0.0
+            )
 
         # ==============================================================
         # Decision tree — first matching regime wins
-        # Priority order: PANIC > OVERHEATED > HIGH_VOLATILITY >
-        # LOW_VOLATILITY > ACCUMULATION > DISTRIBUTION > SIDEWAYS >
-        # RECOVERY > BULL > BEAR
+        # Priority order: PANIC > OVERHEATED > BULL > BEAR >
+        # RECOVERY > DISTRIBUTION > ACCUMULATION > SIDEWAYS >
+        # LOW_VOLATILITY > HIGH_VOLATILITY
         # ==============================================================
 
         regime: str = "UNKNOWN"
         reasons: list[str] = []
         confidence: float = 0.0
 
-        # --- 1. PANIC (requires severe conditions) ---
-        # Note: use *either* absolute-ATR percentile *or* ATR%-percentile
-        # because absolute ATR drops as prices fall during a crash making
-        # the percentile appear deceptively low.
-        panic_vol_elevated = atr_percentile > 0.75 or atr_pct_percentile > 0.75
+        # --- 1. PANIC ---
         if (
-            returns_5 < -0.04
-            and panic_vol_elevated
-            and volume_spike
+            metrics["trend"] < -0.05
+            and metrics["drawdown"] > 0.15
+            and metrics["volume_spike"]
         ):
             regime = "PANIC"
             reasons = [
-                f"Sharp 5-day decline: {returns_5 * 100:.1f}%",
-                f"ATR percentiles — abs: {atr_percentile:.0%}, pct: {atr_pct_percentile:.0%} (elevated)",
-                "Volume spike detected",
+                "Sharp market decline",
+                "Large drawdown",
+                "Volume spike confirms panic selling",
             ]
-            if vol_20 > 0.02:
-                reasons.append("Elevated 20-day volatility")
-            confidence = min(abs(returns_5) * 500.0, 100.0)
+            confidence = min(abs(metrics["trend"]) * 1000.0, 100.0)
 
         # --- 2. OVERHEATED ---
         elif rsi_val > 65 and price_position > 0.02:
@@ -441,84 +436,7 @@ class MarketRegimeDetector:
                 reasons.append(f"Explosive 5-day move: {returns_5 * 100:.1f}%")
             confidence = min((rsi_val - 50.0) * 3.0, 100.0)
 
-        # --- 3. HIGH_VOLATILITY (evaluate before accumulation/distribution) ---
-        elif atr_percentile > 0.6 and bb_width > 0.07 and adx_val < 30:
-            regime = "HIGH_VOLATILITY"
-            reasons = [
-                f"ATR at {atr_percentile:.0%} percentile",
-                f"Bollinger width {bb_width:.3f}",
-            ]
-            if vol_20 > 0.02:
-                reasons.append("High 20-day volatility")
-            confidence = min(atr_percentile * 100.0, 100.0)
-
-        # --- 4. LOW_VOLATILITY (only when no strong trend AND no significant trend direction) ---
-        # Use *either* rank-based ATR percentile *or* magnitude-based ATR%
-        # because rank(pct=True) is order-based and can miss consistently
-        # low-volatility series where the last ATR happens to be high-ranked.
-        low_vol_condition = (
-            (atr_percentile < 0.4 or atr_pct < 0.015)
-            and bb_width < 0.05
-            and abs(price_position) < 0.05
-            and adx_val < 20
-        )
-        if low_vol_condition:
-            regime = "LOW_VOLATILITY"
-            reasons = [
-                f"ATR at {atr_percentile:.0%} percentile (compressed)",
-                "Narrow Bollinger Bands",
-            ]
-            if vol_20 < 0.01:
-                reasons.append("Low 20-day volatility")
-            confidence = min((1.0 - atr_percentile) * 100.0, 100.0)
-
-        # --- 5. ACCUMULATION (flat price, rising OBV, rising volume, not in bull trend) ---
-        elif (
-            abs(returns_20) < 0.05
-            and obv_slope > 0.02
-            and volume_slope > 0.01  # volume trend confirms accumulation
-            and not (close_val > sma20 and sma20 > sma50)  # not a clear bull
-        ):
-            regime = "ACCUMULATION"
-            reasons = [
-                "Price relatively flat over 20 days",
-                "OBV rising — accumulation detected",
-            ]
-            if volume_ratio > 1.2:
-                reasons.append(f"Volume {volume_ratio:.1f}x average")
-            confidence = min(obv_slope * 2000.0 + volume_ratio * 20.0, 100.0)
-
-        # --- 6. DISTRIBUTION (flat price, falling OBV, declining volume, not in bear trend) ---
-        elif (
-            abs(returns_20) < 0.05
-            and obv_slope < -0.02
-            and volume_slope < -0.01  # volume trend confirms distribution
-            and not (close_val < sma20 and sma20 < sma50)  # not a clear bear
-        ):
-            regime = "DISTRIBUTION"
-            reasons = [
-                "Price relatively flat over 20 days",
-                "OBV falling — distribution detected",
-            ]
-            if volume_ratio > 1.2:
-                reasons.append(f"Elevated volume {volume_ratio:.1f}x average")
-            confidence = min(abs(obv_slope) * 2000.0, 100.0)
-
-        # --- 7. SIDEWAYS (weak ADX, flat MAs) ---
-        elif abs(ma_slope) < 0.003 and adx_val < 25:
-            regime = "SIDEWAYS"
-            reasons = []
-            if adx_val < 20:
-                reasons.append(f"Low ADX {adx_val:.1f} — no strong trend")
-            else:
-                reasons.append(f"Moderate ADX {adx_val:.1f} — weak trend")
-            if abs(ma_slope) < 0.002:
-                reasons.append("Moving average flat")
-            if atr_percentile < 0.3:
-                reasons.append("ATR in low percentile (tight range)")
-            confidence = max(0.0, min((25.0 - adx_val) * 5.0 + 30.0, 100.0))
-
-        # --- 9. BULL (strong uptrend) ---
+        # --- 3. BULL (strong uptrend) ---
         elif close_val > sma20 and sma20 > sma50:
             regime = "BULL"
             reasons = [
@@ -534,7 +452,7 @@ class MarketRegimeDetector:
                 100.0,
             )
 
-        # --- 10. BEAR (strong downtrend) ---
+        # --- 4. BEAR (strong downtrend) ---
         elif close_val < sma20 and sma20 < sma50:
             regime = "BEAR"
             reasons = [
@@ -550,19 +468,96 @@ class MarketRegimeDetector:
                 100.0,
             )
 
-        # --- 11. RECOVERY (bullish reversal after bearish conditions; checked last) ---
-        elif returns_5 > 0.005 and ma_slope > 0 and di_plus > di_minus:
+        # --- 5. RECOVERY (bullish reversal after decline) ---
+        elif (
+            metrics["trend"] > 0.02
+            and metrics["drawdown"] > 0.10
+            and not metrics["volume_spike"]
+        ):
             regime = "RECOVERY"
             reasons = [
-                "Momentum turning positive",
-                "Moving average rising",
-                "+DI above -DI (bullish directional)",
+                "Trend turning positive after decline",
+                "Recovering from drawdown",
+                "No panic selling",
             ]
-            if macd_hist > 0:
-                reasons.append("MACD histogram positive (recovery signal)")
-            if returns_20 < -0.01:
-                reasons.append(f"Recovering from decline: {returns_20 * 100:.1f}%")
-            confidence = min(returns_5 * 1000.0 + ma_slope * 5000.0, 100.0)
+            confidence = min(metrics["trend"] * 2000.0, 100.0)
+
+        # --- 6. DISTRIBUTION (heavy selling after an uptrend) ---
+        elif (
+            metrics["trend"] > 0.01
+            and metrics["drawdown"] < 0.10
+            and metrics["volume_ratio"] >= 1.30
+            and rsi_val >= 55
+            and price_position < 0
+        ):
+            regime = "DISTRIBUTION"
+            reasons = [
+                "Heavy volume while price weakens after an uptrend.",
+            ]
+            confidence = 60.0
+
+        # --- 7. ACCUMULATION (flat price, rising OBV, rising volume, not in bull trend) ---
+        elif (
+            abs(returns_20) < 0.05
+            and obv_slope > 0.02
+            and volume_slope > 0.01  # volume trend confirms accumulation
+            and not (close_val > sma20 and sma20 > sma50)  # not a clear bull
+        ):
+            regime = "ACCUMULATION"
+            reasons = [
+                "Price relatively flat over 20 days",
+                "OBV rising — accumulation detected",
+            ]
+            if volume_ratio > 1.2:
+                reasons.append(f"Volume {volume_ratio:.1f}x average")
+            confidence = min(obv_slope * 2000.0 + volume_ratio * 20.0, 100.0)
+
+        # --- 8. SIDEWAYS (weak ADX, flat MAs, low volume) ---
+        elif (
+            abs(ma_slope) < 0.01
+            and adx_val < 25
+            and volume_ratio < 1.30
+        ):
+            regime = "SIDEWAYS"
+            reasons = []
+            if adx_val < 20:
+                reasons.append(f"Low ADX {adx_val:.1f} — no strong trend")
+            else:
+                reasons.append(f"Moderate ADX {adx_val:.1f} — weak trend")
+            if abs(ma_slope) < 0.002:
+                reasons.append("Moving average flat")
+            if atr_percentile < 0.3:
+                reasons.append("ATR in low percentile (tight range)")
+            if volume_ratio < 1.0:
+                reasons.append("Below-average volume")
+            confidence = max(0.0, min((25.0 - adx_val) * 5.0 + 30.0, 100.0))
+
+        # --- 9. LOW_VOLATILITY (compressed price action) ---
+        elif (
+            (atr_percentile < 0.4 or atr_pct < 0.015)
+            and bb_width < 0.05
+            and abs(price_position) < 0.05
+            and adx_val < 20
+        ):
+            regime = "LOW_VOLATILITY"
+            reasons = [
+                f"ATR at {atr_percentile:.0%} percentile (compressed)",
+                "Narrow Bollinger Bands",
+            ]
+            if vol_20 < 0.01:
+                reasons.append("Low 20-day volatility")
+            confidence = min((1.0 - atr_percentile) * 100.0, 100.0)
+
+        # --- 10. HIGH_VOLATILITY ---
+        elif atr_percentile > 0.6 and bb_width > 0.07 and adx_val < 30:
+            regime = "HIGH_VOLATILITY"
+            reasons = [
+                f"ATR at {atr_percentile:.0%} percentile",
+                f"Bollinger width {bb_width:.3f}",
+            ]
+            if vol_20 > 0.02:
+                reasons.append("High 20-day volatility")
+            confidence = min(atr_percentile * 100.0, 100.0)
 
         # Fallback
         else:

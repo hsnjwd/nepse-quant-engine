@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
-from src.config import DATA_DIRECTORY
 from src.engine.analyzer import analyze_stock
+from src.loaders.csv_loader import resolve_stock_csv_path
 from src.logging.logger import logger
 
 router = APIRouter()
@@ -37,9 +36,9 @@ def analyze(symbol: str) -> dict[str, Any]:
             detail=f"Invalid stock symbol format: '{symbol}'",
         )
 
-    file_path = Path(DATA_DIRECTORY) / f"{clean_symbol}.csv"
+    file_path = resolve_stock_csv_path(clean_symbol)
 
-    if not file_path.exists():
+    if file_path is None:
         logger.info("Stock data file not found for symbol: %s", clean_symbol)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

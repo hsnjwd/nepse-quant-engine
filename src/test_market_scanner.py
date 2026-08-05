@@ -1,3 +1,6 @@
+# DEPRECATED — legacy ad-hoc smoke script (Sprint 10).
+# Superseded by the real test suite in tests/. Remove in v1.1.
+# TODO(v1.1): delete this file.
 from src.scanner.engine import scan_market
 
 scan = scan_market()

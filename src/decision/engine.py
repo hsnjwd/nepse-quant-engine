@@ -1,8 +1,33 @@
+"""LEGACY decision helpers - DEPRECATED.
+
+Use ``src.decision.confidence.calculate_confidence`` for confidence scores
+and ``src.recommendations.trade_plan.create_trade_plan`` for trade plans
+instead.
+
+This module is kept ONLY for backward compatibility with legacy callers
+and will be removed in a future release. Do not import it in new code.
+
+TODO(v1.1): remove ``src/decision/engine.py`` and migrate remaining
+consumers to ``src.decision.confidence`` / ``src.recommendations.trade_plan``.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+_DEPRECATION_MSG = (
+    "src.decision.engine is deprecated - use "
+    "src.decision.confidence.calculate_confidence(score, breakdown) or "
+    "src.recommendations.trade_plan.create_trade_plan(result)."
+)
+
+
 def calculate_confidence(score):
     """
     Convert technical score into confidence %
     """
 
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     confidence = abs(score) * 10
 
     if confidence > 95:
@@ -13,6 +38,8 @@ def calculate_confidence(score):
 
 
 def generate_trade_plan(row, score, signal):
+
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
 
     price = row["Close"]
 
@@ -61,3 +88,6 @@ def generate_trade_plan(row, score, signal):
 
 
     return plan
+
+
+__all__ = ["calculate_confidence", "generate_trade_plan"]

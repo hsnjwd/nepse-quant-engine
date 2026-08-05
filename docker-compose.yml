@@ -1,0 +1,123 @@
+# =====================================================================
+# NEPSE Quant Engine — Docker Compose (Production)
+# =====================================================================
+# Usage:
+#   docker compose up -d web         # Start Streamlit frontend
+#   docker compose up -d api         # Start FastAPI backend
+#   docker compose up -d             # Start both
+#
+# Environment variables are loaded from .env (create from .env.example).
+# =====================================================================
+
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ── Streamlit Frontend ──────────────────────────────────────────
+  web:
+    build:
+      context: .
+      target: web
+      dockerfile: Dockerfile
+    image: nepse-quant-engine:latest
+    container_name: nepse-web
+    restart: unless-stopped
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    environment:
+      - DATA_DIRECTORY=/app/data
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
+      - API_BASE_URL=http://api:8000
+      - NEPSE_SCRAPER_URL=${NEPSE_SCRAPER_URL:-}
+      - NEPSE_CLIENT_URL=${NEPSE_CLIENT_URL:-}
+      - CACHE_MEMORY_TTL=${CACHE_MEMORY_TTL:-60}
+      - CACHE_DISK_TTL=${CACHE_DISK_TTL:-600}
+      - CACHE_REFRESH_INTERVAL=${CACHE_REFRESH_INTERVAL:-60}
+      - ENABLE_PERFORMANCE_MONITORING=${ENABLE_PERFORMANCE_MONITORING:-false}
+      - WEBSOCKET_ENABLED=${WEBSOCKET_ENABLED:-false}
+      - RATE_LIMIT=${RATE_LIMIT:-10}
+      - API_TIMEOUT=${API_TIMEOUT:-15}
+      - RETRY_COUNT=${RETRY_COUNT:-3}
+    volumes:
+      - market_data:/app/data
+      - nepse_cache:/home/nepse/.nepse
+      - app_logs:/app/logs
+    # The Streamlit frontend talks to external NEPSE APIs via DataService,
+    # not the local FastAPI backend.  No hard dependency on the api service.
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── FastAPI Backend ─────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      target: api
+      dockerfile: Dockerfile
+    image: nepse-quant-engine-api:latest
+    container_name: nepse-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - DATA_DIRECTORY=/app/data
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
+      - NEPSE_SCRAPER_URL=${NEPSE_SCRAPER_URL:-}
+      - NEPSE_CLIENT_URL=${NEPSE_CLIENT_URL:-}
+      - CACHE_MEMORY_TTL=${CACHE_MEMORY_TTL:-60}
+      - CACHE_DISK_TTL=${CACHE_DISK_TTL:-600}
+      - CACHE_REFRESH_INTERVAL=${CACHE_REFRESH_INTERVAL:-60}
+      - ENABLE_PERFORMANCE_MONITORING=${ENABLE_PERFORMANCE_MONITORING:-false}
+      - API_TIMEOUT=${API_TIMEOUT:-15}
+    volumes:
+      - market_data:/app/data
+      - nepse_cache:/home/nepse/.nepse
+      - app_logs:/app/logs
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── (Optional) Telegram Bot ─────────────────────────────────────
+  bot:
+    build:
+      context: .
+      target: base
+      dockerfile: Dockerfile
+    image: nepse-quant-engine-bot:latest
+    container_name: nepse-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:?Telegram token required for bot}
+      - API_BASE_URL=http://api:8000
+      - DATA_DIRECTORY=/app/data
+    volumes:
+      - market_data:/app/data
+      - app_logs:/app/logs
+    profiles:
+      - bot  # Only start with: docker compose --profile bot up
+    depends_on:
+      - api
+    command: ["python", "-m", "src.bot.telegram_bot"]
+    logging: *default-logging
+
+volumes:
+  market_data:
+    driver: local
+  nepse_cache:
+    driver: local
+  app_logs:
+    driver: local

@@ -14,7 +14,6 @@ from src.dashboard.metrics import drawdown_curve
 
 try:
     import plotly.graph_objects as go
-    import plotly.express as px
 
     _HAS_PLOTLY = True
 except ImportError:  # pragma: no cover
@@ -712,6 +711,39 @@ def regime_timeline(
 # ======================================================================
 
 
+def _viridis_color(t: float) -> str:
+    """Map a value in [0, 1] to a Viridis-like hex colour string.
+
+    Args:
+        t: Normalised value between 0 and 1.
+
+    Returns:
+        Hex colour string (e.g. ``'#440154'``).
+    """
+    # Viridis control points (position, R, G, B) — sampled from the
+    # official matplotlib viridis colour map.
+    stops = [
+        (0.00, 68, 1, 84),
+        (0.25, 58, 82, 139),
+        (0.50, 33, 144, 140),
+        (0.75, 94, 201, 97),
+        (1.00, 253, 231, 36),
+    ]
+    t = max(0.0, min(1.0, t))
+    for i in range(len(stops) - 1):
+        lo, hi = stops[i], stops[i + 1]
+        if lo[0] <= t <= hi[0]:
+            span = hi[0] - lo[0]
+            frac = (t - lo[0]) / span if span > 0 else 0.0
+            r = int(lo[1] + frac * (hi[1] - lo[1]))
+            g = int(lo[2] + frac * (hi[2] - lo[2]))
+            b = int(lo[3] + frac * (hi[3] - lo[3]))
+            return f"#{r:02x}{g:02x}{b:02x}"
+    # All t in [0, 1] are caught by the loop above — this line is
+    # unreachable but retained as a defensive guard against future edits.
+    return "#440154"
+
+
 def optimisation_results(
     risks: list[float],
     returns: list[float],
@@ -736,10 +768,15 @@ def optimisation_results(
 
     marker: dict[str, Any] = {"size": 8, "opacity": 0.7}
     if scores:
-        marker["color"] = scores
-        marker["colorscale"] = "Viridis"
-        marker["colorbar"] = {"title": "Score", "font": {"size": 10}}
-        marker["showscale"] = True
+        # Convert scores to colour strings to avoid Plotly marker
+        # property compatibility issues (colorscale / showscale / colorbar
+        # are not valid on go.Scatter.marker).
+        s_min, s_max = min(scores), max(scores)
+        if s_max > s_min:
+            normalized = [(s - s_min) / (s_max - s_min) for s in scores]
+        else:
+            normalized = [0.5] * len(scores)
+        marker["color"] = [_viridis_color(t) for t in normalized]
 
     fig.add_trace(go.Scatter(
         x=risks,

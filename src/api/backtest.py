@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.backtest.engine import run_backtest as execute_backtest
-from src.config import DATA_DIRECTORY
+from src.loaders.csv_loader import resolve_stock_csv_path
 from src.logging.logger import logger
 
 router = APIRouter()
@@ -49,9 +48,9 @@ def run_backtest(
             detail="Commission and slippage rates must be non-negative.",
         )
 
-    file_path = Path(DATA_DIRECTORY) / f"{clean_symbol}.csv"
+    file_path = resolve_stock_csv_path(clean_symbol)
 
-    if not file_path.exists():
+    if file_path is None:
         logger.info("Stock data file not found for backtest: %s", clean_symbol)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

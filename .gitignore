@@ -70,3 +70,8 @@ data/watchlist/
 
 # Editor
 .vscode/
+
+# Freebuff local workspace
+.freebuff/*.db
+.freebuff/*.db-shm
+.freebuff/*.db-wal

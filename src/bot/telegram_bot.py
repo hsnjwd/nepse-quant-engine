@@ -1,8 +1,6 @@
-import os
 import requests
 
-from dotenv import load_dotenv
-
+from src.config import API_BASE_URL, TELEGRAM_TOKEN
 from src.logging.logger import logger
 
 from telegram import Update
@@ -13,17 +11,10 @@ from telegram.ext import (
 )
 
 # -----------------------------
-# Load Environment Variables
+# Configuration (single source: src.config)
 # -----------------------------
 
-load_dotenv()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-
-API_BASE = os.getenv(
-    "API_BASE_URL",
-    "http://127.0.0.1:8000",
-)
+API_BASE = API_BASE_URL
 
 # -----------------------------
 # Commands

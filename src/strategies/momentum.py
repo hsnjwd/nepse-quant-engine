@@ -1,16 +1,41 @@
-"""Momentum-based quantitative trading strategy."""
+"""Momentum-based quantitative trading strategy.
+
+Strategy logic
+--------------
+- **BUY** when RSI is above the buy threshold **and** price is above the
+  20-period SMA **and** the 20-period SMA is above the 50-period SMA
+  (moving-average alignment / trend filter).
+- **SELL** when RSI drops below the sell threshold **or** price closes
+  below the 50-period SMA.
+- **HOLD** otherwise.
+
+.. note::
+    Indicator column names follow the engine convention produced by
+    :func:`src.indicators.moving_average.add_moving_averages`
+    (``SMA_20`` / ``SMA_50``).  The strategy raises a clear error when
+    the required indicator columns are absent rather than silently
+    defaulting, which previously disabled the moving-average filter.
+"""
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import pandas as pd
 
 from src.indicators.momentum import add_momentum_indicators
 from src.indicators.moving_average import add_moving_averages
 from src.strategies.base import BaseStrategy
 
+logger = logging.getLogger(__name__)
+
 
 class MomentumStrategy(BaseStrategy):
     """Trading strategy based on RSI momentum and Moving Average trend filters."""
+
+    #: Indicator columns required for signal generation (engine naming).
+    REQUIRED_INDICATOR_COLUMNS: tuple[str, ...] = ("SMA_20", "SMA_50")
 
     def __init__(
         self,
@@ -47,6 +72,10 @@ class MomentumStrategy(BaseStrategy):
 
         Returns:
             Signal payload dictionary.
+
+        Raises:
+            ValueError: If the required indicator columns (``SMA_20``,
+                ``SMA_50``) are absent after indicator computation.
         """
         if df is None or len(df) == 0:
             return self.build_signal_payload(signal="HOLD", price=0.0, score=0.0)
@@ -54,18 +83,43 @@ class MomentumStrategy(BaseStrategy):
         data = add_moving_averages(df)
         data = add_momentum_indicators(data)
 
+        missing = [c for c in self.REQUIRED_INDICATOR_COLUMNS if c not in data.columns]
+        if missing:
+            raise ValueError(
+                f"{self.name}: required indicator columns missing: {missing}. "
+                "Ensure add_moving_averages() produced SMA_20/SMA_50."
+            )
+
         latest = data.iloc[-1]
         close = float(latest.get("Close", 0.0))
-        rsi = float(latest.get("RSI", 50.0)) if latest.get("RSI") is not None else 50.0
-        ma20 = float(latest.get("MA20", close)) if latest.get("MA20") is not None else close
-        ma50 = float(latest.get("MA50", close)) if latest.get("MA50") is not None else close
+        rsi_raw = latest.get("RSI")
+        rsi = float(rsi_raw) if rsi_raw is not None and not pd.isna(rsi_raw) else 50.0
 
-        if rsi >= self.rsi_buy_threshold and close >= ma20 and ma20 >= ma50:
+        ma20_raw = latest.get("SMA_20")
+        ma50_raw = latest.get("SMA_50")
+
+        # Moving-average alignment (trend filter).  Do NOT silently fall
+        # back when values are missing or NaN (insufficient history) —
+        # log and treat the filter as unsatisfied instead.
+        if ma20_raw is None or ma50_raw is None or pd.isna(ma20_raw) or pd.isna(ma50_raw):
+            logger.warning(
+                "%s: SMA_20/SMA_50 unavailable for latest bar; MA filter unsatisfied.",
+                self.name,
+            )
+            ma_aligned = False
+            ma20 = None
+            ma50 = None
+        else:
+            ma20 = float(ma20_raw)
+            ma50 = float(ma50_raw)
+            ma_aligned = close >= ma20 and ma20 >= ma50
+
+        if rsi >= self.rsi_buy_threshold and ma_aligned:
             signal = "BUY"
             stop_loss = close * (1 - self.stop_loss_pct)
             target1 = close * (1 + self.target_pct)
             score = min(10.0, 5.0 + (rsi - self.rsi_buy_threshold) * 0.2)
-        elif rsi <= self.rsi_sell_threshold or close < ma50:
+        elif rsi <= self.rsi_sell_threshold or (ma50 is not None and close < ma50):
             signal = "SELL"
             stop_loss = None
             target1 = None
@@ -78,8 +132,8 @@ class MomentumStrategy(BaseStrategy):
 
         details = {
             "rsi": round(rsi, 2),
-            "ma20": round(ma20, 2),
-            "ma50": round(ma50, 2),
+            "ma20": round(ma20, 2) if ma20 is not None else None,
+            "ma50": round(ma50, 2) if ma50 is not None else None,
         }
 
         return self.build_signal_payload(

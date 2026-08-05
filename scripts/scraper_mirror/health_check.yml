@@ -1,0 +1,210 @@
+# =====================================================================
+# Scrape Health Check - private mirror of Nepse-All-Scraper
+# =====================================================================
+# Runs after every Daily Scraper run and verifies the scrape actually
+# landed:
+#   1. data freshness  - a commit has touched data/ recently, and a
+#                        floorsheet CSV exists
+#   2. NABIL series    - data/company-wise/NABIL/prices.csv exists with
+#                        enough rows
+#   3. docs/api build  - build_api.py output exists and is current
+#
+# On failure it files (or updates) an issue titled
+# "[Scrape Health] FAILED on <date>" and marks the run red.
+# No issue filed == healthy.
+#
+# MIRROR-ONLY: upstream does not have this workflow. sync_upstream.yml is
+# scoped per-file so this file survives upstream code syncs.
+# =====================================================================
+
+name: Scrape Health Check
+
+on:
+  workflow_run:
+    workflows: ["Daily Scraper"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      min_nabil_rows:
+        description: "Minimum rows required in data/company-wise/NABIL/prices.csv"
+        required: false
+        default: "250"
+      freshness_days:
+        description: "Max allowed age (days) of the last commit touching data/ and docs/api"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mirror
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # workflow_run fires after the Daily Scraper COMPLETED, and the
+          # scrape's own data push happens during that run. github.sha would
+          # be the pre-scrape commit, so check out the branch head explicitly
+          # to see the freshly scraped data. Empty for workflow_dispatch -
+          # checkout then falls back to the default branch.
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      # The Daily Scraper failed or was cancelled - no point checking data
+      # that was never scraped. File a notice issue so it is not missed.
+      - name: Daily Scraper did not complete
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const title = `[Scrape Health] Daily Scraper did not complete ${String(run.created_at).slice(0, 10)}`;
+            const body =
+              `The **Daily Scraper** run did not complete successfully.\n\n` +
+              `- Conclusion: \`${run.conclusion}\`\n` +
+              `- Run: ${run.html_url}\n\n` +
+              `Data checks were skipped because there is nothing new to verify.`;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
+            const hit = open.data.find((i) => i.title === title);
+            if (hit) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: hit.number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body });
+            }
+
+      # Only verify data when the scrape itself succeeded; when it did not,
+      # the notice issue above is the signal and these checks would only add
+      # noise (e.g. a false FAILED issue on a fresh repo's first failed run).
+      - name: Check data freshness
+        id: freshness
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          MAX_AGE="${INPUT_FRESHNESS_DAYS:-5}"
+          issues=""
+
+          last_data="$(git log -1 --format=%cs -- data/ 2>/dev/null || true)"
+          if [ -z "$last_data" ]; then
+            issues="${issues}- No commit has ever touched data/\n"
+          else
+            age=$(( ( $(date +%s) - $(date -d "$last_data" +%s 2>/dev/null || echo 0) ) / 86400 ))
+            echo "Last data/ commit: $last_data (${age}d old)"
+            if [ "$age" -gt "$MAX_AGE" ]; then
+              issues="${issues}- data/ last updated $last_data (${age}d) - older than ${MAX_AGE}d\n"
+            fi
+          fi
+
+          last_api="$(git log -1 --format=%cs -- docs/api 2>/dev/null || true)"
+          if [ -z "$last_api" ]; then
+            issues="${issues}- docs/api/ has never been built\n"
+          else
+            age=$(( ( $(date +%s) - $(date -d "$last_api" +%s 2>/dev/null || echo 0) ) / 86400 ))
+            echo "Last docs/api commit: $last_api (${age}d old)"
+            if [ "$age" -gt "$MAX_AGE" ]; then
+              issues="${issues}- docs/api/ last built $last_api (${age}d) - older than ${MAX_AGE}d\n"
+            fi
+          fi
+
+          latest_fs="$(ls data/floorsheet/floorsheet_*.csv 2>/dev/null | sort | tail -1 || true)"
+          echo "Latest floorsheet: ${latest_fs:-none}"
+          if [ -z "$latest_fs" ]; then
+            issues="${issues}- No floorsheet CSVs found under data/floorsheet/\n"
+          fi
+
+          if [ -n "$issues" ]; then
+            echo "HEALTH_FAILURES<<EOF" >> "$GITHUB_ENV"
+            echo -e "$issues" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo "Data freshness OK."
+        env:
+          INPUT_FRESHNESS_DAYS: ${{ github.event.inputs.freshness_days }}
+
+      - name: Check NABIL price series
+        id: nabil
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          MIN="${INPUT_MIN_NABIL_ROWS:-250}"
+          f="data/company-wise/NABIL/prices.csv"
+          if [ ! -f "$f" ]; then
+            echo "Missing: $f"
+            echo "HEALTH_FAILURES<<EOF" >> "$GITHUB_ENV"
+            echo "- NABIL prices.csv is missing from data/company-wise/NABIL/\n" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          rows=$(( $(wc -l < "$f") - 1 ))
+          echo "NABIL price rows: $rows (min ${MIN})"
+          if [ "$rows" -lt "$MIN" ]; then
+            echo "HEALTH_FAILURES<<EOF" >> "$GITHUB_ENV"
+            echo "- NABIL price history has $rows rows (min ${MIN})\n" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo "NABIL series OK."
+        env:
+          INPUT_MIN_NABIL_ROWS: ${{ github.event.inputs.min_nabil_rows }}
+
+      - name: Check docs/api build
+        id: apibuild
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          issues=""
+          for f in docs/api/companies.json docs/api/latest.json docs/api/status.json docs/openapi.json docs/index.html docs/.nojekyll; do
+            if [ ! -f "$f" ]; then
+              issues="${issues}- build_api.py output missing: $f\n"
+            fi
+          done
+          if [ -f docs/api/companies.json ]; then
+            count="$(python -c 'import json,sys;print(len(json.load(open("docs/api/companies.json"))))' 2>/dev/null || echo 0)"
+            echo "Companies listed: ${count}"
+            if [ "$count" -lt 200 ]; then
+              issues="${issues}- docs/api/companies.json lists only ${count} symbols (expected >= 200)\n"
+            fi
+          fi
+          if [ -n "$issues" ]; then
+            echo "HEALTH_FAILURES<<EOF" >> "$GITHUB_ENV"
+            echo -e "$issues" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo "docs/api build OK."
+
+      - name: Report failures
+        if: always() && env.HEALTH_FAILURES != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const details = process.env.HEALTH_FAILURES || '';
+            const title = `[Scrape Health] FAILED on ${new Date().toISOString().slice(0, 10)}`;
+            const trigger = context.payload.workflow_run
+              ? ` (Daily Scraper conclusion: ${context.payload.workflow_run.conclusion})`
+              : ` (manual workflow_dispatch)`;
+            const body =
+              `Health check failed after the daily scrape.\n\n` +
+              `\`\`\`\n${details}\`\`\`\n\n` +
+              `- Run: ${context.runId}\n` +
+              `- Trigger: ${context.eventName}${trigger}`;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
+            const hit = open.data.find((i) => i.title === title);
+            if (hit) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: hit.number,
+                body: `Re-checked at ${new Date().toISOString()} - still failing.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body });
+            }
+            core.setFailed(`Scrape health check failed:\n${details}`);

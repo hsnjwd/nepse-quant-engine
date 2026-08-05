@@ -241,6 +241,7 @@ function navigateTo(view) {
     watchlist: ['Watchlist', 'Track Your Favorite Stocks'],
     simulator: ['Monte Carlo Simulator', 'VaR/CVaR Analysis & Portfolio Paths'],
     portfolio: ['Portfolio', 'Holdings Analysis & P&L'],
+    upload: ['Upload OHLCV', 'Import Individual Stock Price History'],
   };
   const [title, subtitle] = titles[view] || ['', ''];
   const h2 = $('.main-header .page-title h2');
@@ -254,6 +255,7 @@ function navigateTo(view) {
     case 'scanner': loadScanner('top10'); break;
     case 'watchlist': loadWatchlist(); break;
     case 'portfolio': loadPortfolio(); break;
+    case 'upload': renderUpload(); break;
   }
 }
 
@@ -441,6 +443,9 @@ async function runAnalysis() {
   const container = $('#analysis-result');
   showLoading('analysis-result');
 
+  const local = uploadedAnalysis(symbol);
+  if (local) { renderAnalysis(local); return; }
+
   try {
     const data = await api.analyze(symbol);
     renderAnalysis(data);
@@ -573,6 +578,9 @@ async function runBacktest() {
 
   // Destroy old chart instances
   destroyCharts();
+
+  const local = uploadedBacktest(symbol, commission);
+  if (local) { renderBacktest(local); return; }
 
   try {
     const data = await api.backtest(symbol, commission, slippage);
@@ -845,6 +853,9 @@ async function runSimulation() {
 
   // Destroy old chart instances
   destroyCharts();
+
+  const local = uploadedSimulation(symbol, simulations);
+  if (local) { renderSimulation(local); return; }
 
   try {
     showToast(`Running ${simulations.toLocaleString()} simulations via ${method}...`, 'info');
@@ -1509,6 +1520,607 @@ function renderWatchlistScan(data) {
       </div>
     </div>
   `;
+}
+
+// ============================================================
+// Upload OHLCV — client-side price history store
+// ============================================================
+const UPLOAD_KEY = 'nq_uploaded_history_v1';
+// Load persisted uploads at module init so uploaded data survives page
+// reloads even if the Upload tab is never visited first.
+let uploadedHistory = loadUploadStore();
+let uploadChartInstance = null;
+
+function loadUploadStore() {
+  try {
+    return JSON.parse(localStorage.getItem(UPLOAD_KEY) || '{}') || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveUploadStore() {
+  try {
+    localStorage.setItem(UPLOAD_KEY, JSON.stringify(uploadedHistory));
+  } catch (e) {
+    showToast('Could not persist uploads (storage full?)', 'error');
+  }
+}
+
+function uploadedRecords(symbol) {
+  const key = String(symbol || '').trim().toUpperCase();
+  const entry = uploadedHistory[key];
+  return entry ? entry.records : null;
+}
+
+function uploadSymbol(symbol, records, source) {
+  const key = String(symbol || '').trim().toUpperCase();
+  if (!key) return { ok: false, message: 'Symbol is required.' };
+  if (!records || records.length === 0) return { ok: false, message: 'No valid rows to upload.' };
+  uploadedHistory[key] = {
+    records,
+    count: records.length,
+    source: source || 'CSV',
+    uploadedAt: new Date().toISOString(),
+  };
+  saveUploadStore();
+  return { ok: true, key, count: records.length };
+}
+
+function removeUpload(symbol) {
+  const key = String(symbol || '').trim().toUpperCase();
+  if (uploadedHistory[key]) {
+    delete uploadedHistory[key];
+    saveUploadStore();
+    const wrap = $('#upload-preview');
+    if (wrap) wrap.classList.add('hidden');
+    const list = $('#upload-list');
+    if (list) list.innerHTML = renderUploadList();
+    showToast(`${key} removed`, 'info');
+  }
+}
+
+// --- CSV parsing (mirrors src/loaders/csv_loader.py) ---
+function splitCSVLine(line) {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (c === ',' && !inQ) {
+      out.push(cur); cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseNum(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).replace(/[,%]/g, '').trim();
+  if (s === '') return null;
+  const n = Number(s);
+  return isNaN(n) ? null : n;
+}
+
+function normalizeDate(v) {
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function parseOHLCV(text) {
+  const lines = String(text || '').split(/\r?\n/).filter(l => l.trim() !== '');
+  if (lines.length < 2) {
+    return { records: [], errors: ['CSV must contain a header row and at least one data row.'] };
+  }
+  const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const colMap = {};
+  header.forEach((name, i) => {
+    if (/^(date|datetime|timestamp|day)$/.test(name)) colMap.date = i;
+    else if (/^open$/.test(name)) colMap.open = i;
+    else if (/^high$/.test(name)) colMap.high = i;
+    else if (/^low$/.test(name)) colMap.low = i;
+    else if (/^(close|closing|adj\s*close|last\s*traded\s*price|ltp)$/.test(name)) colMap.close = i;
+    else if (/^(volume|vol|no\.?\s*of\s*shares\s*traded)$/.test(name)) colMap.volume = i;
+  });
+  const missing = ['date', 'close'].filter(k => !(k in colMap));
+  if (missing.length) {
+    return { records: [], errors: [`Missing required column(s): ${missing.join(', ')}. Need Date and Close (Open/High/Low/Volume optional).`] };
+  }
+  const records = [];
+  const errors = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitCSVLine(lines[i]);
+    const raw = {};
+    for (const [k, idx] of Object.entries(colMap)) {
+      if (idx !== undefined && idx < cells.length) raw[k] = cells[idx].trim();
+    }
+    if (raw.date === undefined || raw.date === '') {
+      errors.push(`Row ${i + 1}: missing date — skipped.`);
+      continue;
+    }
+    const date = normalizeDate(raw.date);
+    const close = parseNum(raw.close);
+    if (!date) { errors.push(`Row ${i + 1}: invalid date "${raw.date}" — skipped.`); continue; }
+    if (close === null) { errors.push(`Row ${i + 1}: invalid Close value "${raw.close}" — skipped.`); continue; }
+    const open = raw.open !== undefined ? parseNum(raw.open) : close;
+    const high = raw.high !== undefined ? parseNum(raw.high) : Math.max(open || close, close);
+    const low = raw.low !== undefined ? parseNum(raw.low) : Math.min(open || close, close);
+    const volume = raw.volume !== undefined ? Math.max(0, parseNum(raw.volume) || 0) : 0;
+    records.push({ date, open: open ?? close, high: high ?? close, low: low ?? close, close, volume });
+  }
+  records.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return { records, errors };
+}
+
+// --- Indicator math (client-side) ---
+function sma(values, period) {
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= period) sum -= values[i - period];
+    out.push(i >= period - 1 ? sum / period : null);
+  }
+  return out;
+}
+
+function ema(values, period) {
+  const out = [];
+  const k = 2 / (period + 1);
+  let prev = null;
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) { out.push(null); continue; }
+    if (prev === null) {
+      let s = 0;
+      for (let j = 0; j < period; j++) s += values[i - period + 1 + j];
+      prev = s / period;
+    } else {
+      prev = values[i] * k + prev * (1 - k);
+    }
+    out.push(prev);
+  }
+  return out;
+}
+
+function rsi(closes, period = 14) {
+  if (!closes || closes.length <= period) return null;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i] - closes[i - 1];
+    if (ch >= 0) gain += ch; else loss -= ch;
+  }
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(ch, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-ch, 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function macd(closes, fast = 12, slow = 26, signalPeriod = 9) {
+  const ef = ema(closes, fast);
+  const es = ema(closes, slow);
+  const line = closes.map((_, i) => (ef[i] !== null && es[i] !== null ? ef[i] - es[i] : null));
+  const valid = line.filter(v => v !== null);
+  const signal = ema(valid, signalPeriod);
+  const lastLine = line[line.length - 1];
+  const lastSignal = signal.length ? signal[signal.length - 1] : null;
+  return {
+    line: lastLine,
+    signal: lastSignal,
+    hist: lastLine !== null && lastSignal !== null ? lastLine - lastSignal : null,
+  };
+}
+
+function atr(records, period = 14) {
+  if (!records || records.length <= period) return null;
+  const trs = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    const pc = i > 0 ? records[i - 1].close : null;
+    const tr = pc === null ? r.high - r.low : Math.max(r.high - r.low, Math.abs(r.high - pc), Math.abs(r.low - pc));
+    trs.push(tr);
+  }
+  let sum = 0;
+  for (let i = 1; i <= period; i++) sum += trs[i];
+  let prev = sum / period;
+  for (let i = period + 1; i < trs.length; i++) prev = (prev * (period - 1) + trs[i]) / period;
+  return prev;
+}
+
+// --- Payload builders from uploaded data ---
+function uploadedAnalysis(symbol) {
+  const recs = uploadedRecords(symbol);
+  if (!recs || recs.length < 20) return null;
+  const closes = recs.map(r => r.close);
+  const last = closes[closes.length - 1];
+  const rsiVal = rsi(closes);
+  const macdVal = macd(closes);
+  const atrVal = atr(recs);
+  const sma20 = sma(closes, 20).pop();
+  const ema20 = ema(closes, 20).pop();
+  const sma50 = closes.length >= 50 ? sma(closes, 50).pop() : null;
+  const volAvg = recs.slice(-20).reduce((s, r) => s + r.volume, 0) / Math.min(20, recs.length);
+  const volLast = recs[recs.length - 1].volume;
+  const ret5 = last / closes[Math.max(0, closes.length - 6)] - 1;
+  const ret20 = last / closes[Math.max(0, closes.length - 21)] - 1;
+
+  let score = 5.0;
+  const reasons = [];
+  if (rsiVal !== null && rsiVal < 30) { score += 1.5; reasons.push('RSI oversold — rebound potential'); }
+  else if (rsiVal !== null && rsiVal > 70) { score -= 1.5; reasons.push('RSI overbought — pullback risk'); }
+  else if (rsiVal !== null) reasons.push(`RSI ${rsiVal.toFixed(1)} neutral`);
+  if (last > sma20) { score += 1.2; reasons.push('Price above 20-day SMA'); }
+  if (sma50 !== null && last > sma50) { score += 1.0; reasons.push('Price above 50-day SMA'); }
+  if (macdVal.hist !== null && macdVal.hist > 0) { score += 1.0; reasons.push('MACD bullish crossover'); }
+  if (volLast > volAvg * 1.2) { score += 0.5; reasons.push('Above-average volume'); }
+  if (ret5 > 0.03) reasons.push('Momentum over 5 sessions');
+  if (ret20 > 0.05) { score += 0.5; reasons.push('Uptrend over 20 sessions'); }
+
+  const signal = score >= 7 ? 'BUY' : score <= 3.5 ? 'SELL' : 'HOLD';
+  const confidence = Math.min(95, Math.round(50 + Math.abs(score - 5) * 9));
+  const stopPct = atrVal && atrVal > 0 ? Math.min(0.15, (atrVal * 2) / last) : 0.06;
+  const stop = last * (1 - stopPct);
+  const risk = last - stop;
+  const t1 = last + risk * 1.5;
+  const t2 = last + risk * 2.5;
+  const t3 = last + risk * 4;
+  const bestRR = risk > 0 ? (t2 - last) / risk : 1.5;
+
+  return {
+    symbol: String(symbol).toUpperCase(),
+    signal,
+    confidence,
+    score: Math.min(10, +score.toFixed(1)),
+    price: last,
+    trend: last > sma20 ? 'Uptrend' : last < sma20 ? 'Downtrend' : 'Sideways',
+    trade_style: 'Swing',
+    entry_zone: `${(last * 0.99).toFixed(2)} – ${(last * 1.01).toFixed(2)}`,
+    stop_loss: +stop.toFixed(2),
+    target1: +t1.toFixed(2),
+    target2: +t2.toFixed(2),
+    target3: +t3.toFixed(2),
+    risk: atrVal !== null && atrVal / last > 0.05 ? 'High' : atrVal !== null && atrVal / last > 0.03 ? 'Medium' : 'Low',
+    holding_period: '1–3 months',
+    rsi: rsiVal !== null ? +rsiVal.toFixed(1) : null,
+    macd: macdVal.line !== null ? +macdVal.line.toFixed(4) : null,
+    atr: atrVal !== null ? +atrVal.toFixed(2) : null,
+    volume_signal: volLast > volAvg ? 'Rising' : 'Falling',
+    relative_volume: +(volLast / (volAvg || 1)).toFixed(2),
+    pattern: 'From uploaded OHLCV',
+    pattern_type: 'User data',
+    best_rr: +bestRR.toFixed(2),
+    rr_grade: bestRR >= 2.5 ? 'Excellent' : bestRR >= 1.5 ? 'Good' : 'Poor',
+    rr_target1: +(risk > 0 ? (t1 - last) / risk : 1.5).toFixed(2),
+    rr_target2: +(risk > 0 ? (t2 - last) / risk : 2.5).toFixed(2),
+    rr_target3: +(risk > 0 ? (t3 - last) / risk : 4).toFixed(2),
+    alerts: reasons.slice(0, 4).map((message, i) => ({
+      priority: signal === 'BUY' ? 3 : signal === 'SELL' ? 2 : 1,
+      message,
+    })),
+  };
+}
+
+function uploadedBacktest(symbol, commissionPct = 0.1) {
+  const recs = uploadedRecords(symbol);
+  if (!recs || recs.length < 50) return null;
+  const closes = recs.map(r => r.close);
+  const s20 = sma(closes, 20);
+  const s50 = sma(closes, 50);
+  const trades = [];
+  let inTrade = null;
+  for (let i = 50; i < recs.length; i++) {
+    const c20 = s20[i];
+    const c50 = s50[i];
+    const p20 = s20[i - 1];
+    const p50 = s50[i - 1];
+    if (c20 === null || c50 === null) continue;
+    if (!inTrade && p20 !== null && p50 !== null && p20 <= p50 && c20 > c50) {
+      inTrade = { entry: recs[i].close, date: recs[i].date };
+    } else if (inTrade) {
+      const pnl = ((recs[i].close - inTrade.entry) / inTrade.entry) * 100 - commissionPct;
+      const exit = recs[i].close <= inTrade.entry * 0.92
+        ? 'STOP_LOSS'
+        : pnl >= 15
+          ? 'TARGET'
+          : p20 !== null && p50 !== null && c20 < c50
+            ? 'SIGNAL'
+            : null;
+      if (exit) {
+        trades.push({ date: recs[i].date, entry_price: +inTrade.entry.toFixed(2), exit_price: +recs[i].close.toFixed(2), shares: 10, return_pct: +pnl.toFixed(2), exit_reason: exit });
+        inTrade = null;
+      }
+    }
+  }
+  if (inTrade) {
+    const lastRec = recs[recs.length - 1];
+    const pnl = ((lastRec.close - inTrade.entry) / inTrade.entry) * 100 - commissionPct;
+    trades.push({ date: lastRec.date, entry_price: +inTrade.entry.toFixed(2), exit_price: +lastRec.close.toFixed(2), shares: 10, return_pct: +pnl.toFixed(2), exit_reason: 'EOD' });
+  }
+  const wins = trades.filter(t => t.return_pct > 0);
+  const losses = trades.filter(t => t.return_pct <= 0);
+  const total = trades.length;
+  const grossWin = wins.reduce((s, t) => s + t.return_pct, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.return_pct, 0));
+  const winRate = total ? (wins.length / total) * 100 : 0;
+  const metrics = {
+    total_trades: total,
+    win_rate: +winRate.toFixed(1),
+    winning_trades: wins.length,
+    losing_trades: losses.length,
+    breakeven_trades: total - wins.length - losses.length,
+    profit_factor: grossLoss > 0 ? +(grossWin / grossLoss).toFixed(2) : grossWin > 0 ? 99 : 0,
+    expectancy: total ? +((grossWin - grossLoss) / total).toFixed(2) : 0,
+    average_win: wins.length ? +(grossWin / wins.length).toFixed(2) : 0,
+    average_loss: losses.length ? +(-grossLoss / losses.length).toFixed(2) : 0,
+  };
+  return {
+    symbol: String(symbol).toUpperCase(),
+    metrics,
+    report: {
+      summary: `SMA 20/50 crossover backtest on uploaded ${String(symbol).toUpperCase()} data (${recs.length} bars). ${total} trades, win rate ${winRate.toFixed(1)}%, profit factor ${metrics.profit_factor}, expectancy ${metrics.expectancy}% per trade. Commission ${commissionPct}% per round trip.`,
+    },
+    trades,
+  };
+}
+
+function uploadedSimulation(symbol, simulations = 1000) {
+  const recs = uploadedRecords(symbol);
+  if (!recs || recs.length < 30) return null;
+  const rets = [];
+  for (let i = 1; i < recs.length; i++) rets.push(recs[i].close / recs[i - 1].close - 1);
+  const n = Math.min(30, rets.length);
+  const start = 100000;
+  const endings = [];
+  const curves = [];
+  for (let s = 0; s < simulations; s++) {
+    let eq = start;
+    const path = [start];
+    for (let i = 0; i < n; i++) {
+      eq *= 1 + rets[Math.floor(Math.random() * rets.length)];
+      path.push(+eq.toFixed(2));
+    }
+    endings.push(eq);
+    if (s < 8) curves.push(path);
+  }
+  endings.sort((a, b) => a - b);
+  const pct = p => endings[Math.min(endings.length - 1, Math.max(0, Math.round(p * (endings.length - 1))))];
+  const p5 = pct(0.05), p10 = pct(0.10), p25 = pct(0.25), p50 = pct(0.50);
+  const p75 = pct(0.75), p90 = pct(0.90), p95 = pct(0.95), p99 = pct(0.99);
+  const mean = endings.reduce((s, v) => s + v, 0) / endings.length;
+  const belowStart = endings.filter(v => v < start).length;
+  const ruin = endings.filter(v => v < start * 0.5).length;
+  const tail = endings.filter(v => v <= p5);
+  const cvar = tail.length ? tail.reduce((s, v) => s + v, 0) / tail.length : p5;
+  let maxDD = 0;
+  curves.forEach(path => {
+    let peak = start;
+    path.forEach(v => {
+      if (v > peak) peak = v;
+      const dd = (peak - v) / peak;
+      if (dd > maxDD) maxDD = dd;
+    });
+  });
+  const avgPath = [];
+  for (let i = 0; i <= n; i++) {
+    let s = 0;
+    let c = 0;
+    curves.forEach(p => { if (p[i] !== undefined) { s += p[i]; c++; } });
+    avgPath.push(c ? +(s / c).toFixed(2) : null);
+  }
+  return {
+    symbol: String(symbol).toUpperCase(),
+    method: 'bootstrap',
+    simulations_run: simulations,
+    total_trades: recs.length,
+    confidence_level: 0.95,
+    summary: {
+      probability_of_profit: +((1 - belowStart / simulations) * 100).toFixed(1),
+      probability_of_loss: +((belowStart / simulations) * 100).toFixed(1),
+      probability_of_ruin: +((ruin / simulations) * 100).toFixed(1),
+      value_at_risk_95: +p5.toFixed(2),
+      conditional_var_95: +cvar.toFixed(2),
+      mean_return: +(mean - start).toFixed(2),
+      median_return: +(p50 - start).toFixed(2),
+      best_return: +(endings[endings.length - 1] - start).toFixed(2),
+      worst_return: +(endings[0] - start).toFixed(2),
+      mean_drawdown: +(maxDD * 100).toFixed(1),
+      max_drawdown: +(maxDD * 100).toFixed(1),
+      confidence_interval: { lower: +p5.toFixed(2), upper: +p95.toFixed(2) },
+      percentiles: { p5: +p5.toFixed(2), p10: +p10.toFixed(2), p25: +p25.toFixed(2), p50: +p50.toFixed(2), p75: +p75.toFixed(2), p90: +p90.toFixed(2), p95: +p95.toFixed(2), p99: +p99.toFixed(2) },
+    },
+    equity_curves: curves,
+    best_equity: curves.length ? curves.reduce((a, b) => (b[b.length - 1] > a[a.length - 1] ? b : a)) : [],
+    worst_equity: curves.length ? curves.reduce((a, b) => (b[b.length - 1] < a[a.length - 1] ? b : a)) : [],
+    average_equity: avgPath,
+  };
+}
+
+// --- Upload view ---
+function renderUpload() {
+  uploadedHistory = loadUploadStore();
+  const list = $('#upload-list');
+  if (list) list.innerHTML = renderUploadList();
+  const wrap = $('#upload-preview');
+  if (wrap && !wrap.classList.contains('hidden')) wrap.classList.add('hidden');
+}
+
+function renderUploadList() {
+  const keys = Object.keys(uploadedHistory).sort();
+  if (keys.length === 0) {
+    return '<div class="empty-state"><div class="empty-icon">📤</div><p>No uploaded datasets yet. Upload a CSV above or load a sample.</p></div>';
+  }
+  return keys.map(k => {
+    const e = uploadedHistory[k];
+    const first = e.records[0].date;
+    const last = e.records[e.records.length - 1].date;
+    return `
+      <div class="upload-row">
+        <strong>${escapeHtml(k)}</strong>
+        <span class="upload-meta">${e.count} bars · ${escapeHtml(first)} → ${escapeHtml(last)} · ${escapeHtml(e.source || 'CSV')}</span>
+        <span class="upload-actions">
+          <button class="btn btn-outline btn-sm" onclick="previewUpload('${escapeHtml(k)}')">👁 Preview</button>
+          <button class="btn btn-outline btn-sm" onclick="runAnalysisUpload('${escapeHtml(k)}')">📊 Analyze</button>
+          <button class="btn btn-outline btn-sm" onclick="runBacktestUpload('${escapeHtml(k)}')">⏪ Backtest</button>
+          <button class="btn btn-outline btn-sm" onclick="runSimulationUpload('${escapeHtml(k)}')">🎲 Simulate</button>
+          <button class="btn btn-danger btn-sm" onclick="removeUpload('${escapeHtml(k)}')">✕</button>
+        </span>
+      </div>`;
+  }).join('');
+}
+
+function handleUploadFile() {
+  const input = $('#upload-file');
+  const symbolInput = $('#upload-symbol');
+  const msg = $('#upload-message');
+  const symbol = symbolInput ? symbolInput.value.trim().toUpperCase() : '';
+  if (!input || !input.files || input.files.length === 0) {
+    if (msg) msg.innerHTML = '<div class="error-state">Choose a CSV file first.</div>';
+    return;
+  }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = e => processParsed(parseOHLCV(String(e.target.result || '')), symbol, msg);
+  reader.onerror = () => { if (msg) msg.innerHTML = '<div class="error-state">Could not read the file.</div>'; };
+  reader.readAsText(file);
+}
+
+function processParsed(result, symbol, msg) {
+  if (result.errors.length && result.records.length === 0) {
+    if (msg) msg.innerHTML = `<div class="error-state">${escapeHtml(result.errors.join(' '))}</div>`;
+    return;
+  }
+  if (!symbol) {
+    if (msg) msg.innerHTML = '<div class="error-state">Enter a stock symbol before uploading.</div>';
+    return;
+  }
+  const store = uploadSymbol(symbol, result.records, 'CSV');
+  if (!store.ok) {
+    if (msg) msg.innerHTML = `<div class="error-state">${escapeHtml(store.message)}</div>`;
+    return;
+  }
+  if (msg) {
+    const warn = result.errors.length
+      ? `<div class="warning-state">${escapeHtml(result.errors.slice(0, 5).join(' '))}</div>`
+      : '';
+    msg.innerHTML = `<div class="success-state">✅ ${escapeHtml(store.key)} uploaded — ${store.count} bars.</div>${warn}`;
+  }
+  renderUpload();
+  previewUpload(store.key);
+}
+
+function loadSampleOHLCV() {
+  const symbolInput = $('#upload-symbol');
+  const symbol = (symbolInput && symbolInput.value.trim()) || 'NABIL';
+  const key = symbol.toUpperCase();
+  const recs = [];
+  let price = 400 + Math.random() * 100;
+  const d = new Date('2024-01-02');
+  const skipWeekend = dd => {
+    while (dd.getDay() === 0 || dd.getDay() === 6) dd.setDate(dd.getDate() + 1);
+    return dd;
+  };
+  for (let i = 0; i < 260; i++) {
+    const chg = (Math.random() - 0.47) * 0.03;
+    const open = price;
+    const close = Math.max(1, open * (1 + chg));
+    const high = Math.max(open, close) * (1 + Math.random() * 0.015);
+    const low = Math.min(open, close) * (1 - Math.random() * 0.015);
+    price = close;
+    skipWeekend(d);
+    recs.push({
+      date: d.toISOString().slice(0, 10),
+      open: +open.toFixed(2),
+      high: +high.toFixed(2),
+      low: +low.toFixed(2),
+      close: +close.toFixed(2),
+      volume: Math.round(50000 + Math.random() * 450000),
+    });
+    d.setDate(d.getDate() + 1);
+  }
+  const msg = $('#upload-message');
+  const store = uploadSymbol(key, recs, 'Sample');
+  if (msg) msg.innerHTML = `<div class="success-state">✅ Sample ${escapeHtml(key)} generated — ${store.count} bars.</div>`;
+  renderUpload();
+  previewUpload(key);
+}
+
+function previewUpload(key) {
+  const recs = uploadedRecords(key);
+  if (!recs) return;
+  const wrap = $('#upload-preview');
+  if (wrap) wrap.classList.remove('hidden');
+  const table = $('#upload-table');
+  if (table) {
+    const rows = recs.slice(-20).reverse().map(r =>
+      `<tr><td>${escapeHtml(r.date)}</td><td>${formatNumber(r.open)}</td><td>${formatNumber(r.high)}</td><td>${formatNumber(r.low)}</td><td>${formatNumber(r.close)}</td><td>${r.volume.toLocaleString()}</td></tr>`
+    ).join('');
+    table.innerHTML = `<table><thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  const ctx = document.getElementById('upload-chart');
+  if (ctx && typeof Chart !== 'undefined') {
+    if (uploadChartInstance) uploadChartInstance.destroy();
+    uploadChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: recs.map(r => r.date),
+        datasets: [{
+          label: `${key} Close`,
+          data: recs.map(r => r.close),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.1)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#8892a8', font: { size: 11 } } },
+          tooltip: { backgroundColor: '#1a1f2e', titleColor: '#e8edf5', bodyColor: '#8892a8', borderColor: '#2a3548', borderWidth: 1, cornerRadius: 6, padding: 10 },
+        },
+        scales: {
+          x: { ticks: { color: '#5a6378', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: 'rgba(30,41,59,0.3)' } },
+          y: { ticks: { color: '#5a6378', font: { size: 9 } }, grid: { color: 'rgba(30,41,59,0.3)' } },
+        },
+      },
+    });
+  }
+}
+
+function runAnalysisUpload(key) {
+  navigateTo('analysis');
+  const input = $('#analysis-symbol');
+  if (input) input.value = key;
+  runAnalysis();
+}
+
+function runBacktestUpload(key) {
+  navigateTo('backtest');
+  const input = $('#backtest-symbol');
+  if (input) input.value = key;
+  runBacktest();
+}
+
+function runSimulationUpload(key) {
+  navigateTo('simulator');
+  const input = $('#sim-symbol');
+  if (input) input.value = key;
+  runSimulation();
 }
 
 // ============================================================

@@ -1,7 +1,5 @@
-from pathlib import Path
-
-from src.config import DATA_DIRECTORY
 from src.engine.analyzer import analyze_stock
+from src.loaders.csv_loader import resolve_stock_csv_path
 from src.logging.logger import logger
 from src.watchlist.manager import load_watchlist
 
@@ -33,9 +31,9 @@ def scan_watchlist():
         if not meta.get("enabled", True):
             continue
 
-        csv_path = Path(DATA_DIRECTORY) / f"{symbol.lower()}.csv"
+        csv_path = resolve_stock_csv_path(symbol)
 
-        if not csv_path.exists():
+        if csv_path is None:
             results.append({
                 "symbol": symbol.upper(),
                 "error": "CSV file not found"

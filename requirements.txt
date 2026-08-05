@@ -1,4 +1,6 @@
-fastapi>=0.115.0
+# fastapi>=0.116.0 required: 0.115.0-0.115.5 crash with Starlette>=0.40
+# (TypeError: Router.__init__() got an unexpected keyword argument 'on_startup')
+fastapi>=0.116.0
 httpx>=0.27.0
 numpy>=1.26.0
 pandas>=2.2.0
@@ -6,6 +8,7 @@ python-dotenv>=1.0.0
 python-telegram-bot>=21.0
 plotly>=5.18.0
 pytest>=8.0.0
+streamlit>=1.35.0
 requests>=2.31.0
 scipy>=1.12.0
 uvicorn>=0.30.0

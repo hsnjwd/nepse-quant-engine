@@ -52,6 +52,12 @@
           <span>Watchlist</span>
         </button>
 
+        <div class="nav-section-label">Data</div>
+        <button class="nav-item" data-view="upload">
+          <span class="nav-icon">📤</span>
+          <span>Upload OHLCV</span>
+        </button>
+
         <div class="nav-section-label">Portfolio</div>
         <button class="nav-item" data-view="simulator">
           <span class="nav-icon">🎲</span>
@@ -289,6 +295,51 @@
             </div>
           </div>
           <div id="simulation-result"></div>
+        </div>
+
+        <!-- ========================================================
+             View: Upload OHLCV
+             ======================================================== -->
+        <div class="page-view" id="view-upload">
+          <div class="card" style="margin-bottom:20px">
+            <div class="card-header">
+              <h3>📤 Upload Price History (OHLCV)</h3>
+            </div>
+            <div class="upload-form">
+              <div class="form-group">
+                <label for="upload-symbol">Stock Symbol</label>
+                <input type="text" id="upload-symbol" placeholder="e.g., NABIL" maxlength="20">
+              </div>
+              <div class="form-group">
+                <label for="upload-file">CSV File (OHLCV)</label>
+                <input type="file" id="upload-file" accept=".csv,text/csv">
+                <p class="upload-hint">Expected columns: Date, Open, High, Low, Close, Volume (names case-insensitive, order flexible).</p>
+              </div>
+              <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
+                <button class="btn btn-primary" onclick="handleUploadFile()">📤 Upload</button>
+                <button class="btn btn-outline" onclick="loadSampleOHLCV()">✨ Load Sample</button>
+              </div>
+            </div>
+            <div id="upload-message"></div>
+          </div>
+
+          <div class="card" style="margin-bottom:20px">
+            <div class="card-header"><h3>📚 Uploaded Datasets</h3></div>
+            <div id="upload-list"></div>
+          </div>
+
+          <div id="upload-preview" class="hidden">
+            <div class="content-grid two" style="margin-bottom:20px">
+              <div class="card chart-card">
+                <div class="card-header"><h3>📈 Price Chart</h3></div>
+                <div class="chart-wrapper"><canvas id="upload-chart"></canvas></div>
+              </div>
+              <div class="card chart-card">
+                <div class="card-header"><h3>📋 Recent Rows</h3></div>
+                <div id="upload-table" class="table-container"></div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- ========================================================

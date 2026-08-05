@@ -1,0 +1,1 @@
+"""Backtesting engine — historical simulation, trade execution, and performance metrics."""

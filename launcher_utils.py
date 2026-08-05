@@ -128,9 +128,49 @@ def wait_for_api(timeout=60):
 # Start API
 # ----------------------------------------------------
 
+def _check_fastapi_compat():
+    """Warn early when the installed fastapi/starlette pair is known-broken.
+
+    fastapi 0.115.0-0.115.5 crashes at import time with Starlette >= 0.40
+    (``TypeError: Router.__init__() got an unexpected keyword argument
+    'on_startup'``), which keeps the API down and the dashboard in demo
+    mode.  requirements.txt pins ``fastapi>=0.116.0`` for this reason.
+    """
+    try:
+        from importlib.metadata import version
+
+        fv = version("fastapi")
+        sv = version("starlette")
+
+        def _v(s: str) -> tuple:
+            return tuple(int(p) for p in s.split(".")[:2] if p.isdigit())
+
+        fast_ok = _v(fv) >= (0, 116)
+        starlet_ok = _v(sv) < (0, 40)
+
+        if not fast_ok and not starlet_ok:
+            log(
+                "WARNING: fastapi " + fv + " with starlette " + sv
+                + " is the known-broken pair (Router on_startup crash). "
+                + "Run: .venv\\Scripts\\python.exe -m pip install -U "
+                + "\"fastapi>=0.116.0\""
+            )
+    except Exception:
+        # Never block startup on the version pre-flight.
+        pass
+
+
 def start_api():
 
+    _check_fastapi_compat()
+
     log("Starting API...")
+
+    # The static web UI (ui/index_standalone.html) is served from a
+    # different origin than the API.  Open CORS by default unless the
+    # user already chose a specific allow-list, otherwise the browser
+    # blocks the fetch calls and the dashboard stays in demo mode.
+    os.environ.setdefault("CORS_ORIGINS", "*")
 
     api_log = open(API_LOG, "w")
 
@@ -141,6 +181,10 @@ def start_api():
             "-m",
             "uvicorn",
             "src.api.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
             "--reload",
         ],
 

@@ -1,0 +1,1 @@
+"""Analysis engine — market analysis, signal generation, and scoring."""
