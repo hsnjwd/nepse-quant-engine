@@ -15,6 +15,7 @@ import csv
 import io
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from pathlib import Path
@@ -22,7 +23,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-JOURNAL_DIR = Path.home() / ".nepse" / "journal"
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
+JOURNAL_DIR = NEPSE_HOME / "journal"
 JOURNAL_FILE = JOURNAL_DIR / "trade_journal.json"
 
 

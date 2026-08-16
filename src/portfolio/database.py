@@ -7,6 +7,7 @@ All operations are atomic and thread-safe.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime
@@ -21,8 +22,12 @@ from src.portfolio.models import (
 
 logger = logging.getLogger(__name__)
 
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
 # Default database path
-DEFAULT_DB_PATH = Path.home() / ".nepse" / "portfolio.db"
+DEFAULT_DB_PATH = NEPSE_HOME / "portfolio.db"
 
 
 class PortfolioDatabase:
@@ -34,7 +39,10 @@ class PortfolioDatabase:
     def __init__(self, db_path: str | Path | None = None) -> None:
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        # Reentrant: public methods compose other public methods
+        # (adjust_cash -> get_cash_balance, get_summary -> get_holdings), and
+        # each acquires the lock — a plain Lock would self-deadlock.
+        self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
         self._initialize()
 

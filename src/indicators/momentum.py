@@ -1,12 +1,22 @@
 import pandas as pd
 
 
-def add_rsi(df, period=14):
+def add_rsi(df, period=14, inplace=False):
     """
-    Calculate RSI indicator
+    Calculate RSI indicator.
+
+    Args:
+        df: OHLCV DataFrame.
+        period: RSI look-back period.
+        inplace: When True, mutate and return the same object instead
+            of copying.
+
+    Returns:
+        DataFrame with an RSI column.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     delta = df["Close"].diff()
 
@@ -24,12 +34,21 @@ def add_rsi(df, period=14):
 
 
 
-def add_macd(df):
+def add_macd(df, inplace=False):
     """
-    Calculate MACD indicator
+    Calculate MACD indicator.
+
+    Args:
+        df: OHLCV DataFrame.
+        inplace: When True, mutate and return the same object instead
+            of copying.
+
+    Returns:
+        DataFrame with MACD and MACD_SIGNAL columns.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     ema12 = df["Close"].ewm(
         span=12,
@@ -52,9 +71,9 @@ def add_macd(df):
 
 
 
-def add_momentum_indicators(df):
+def add_momentum_indicators(df, inplace=False):
 
-    df = add_rsi(df)
-    df = add_macd(df)
+    df = add_rsi(df, inplace=inplace)
+    df = add_macd(df, inplace=inplace)
 
     return df

@@ -1,3 +1,5 @@
+import math
+
 TECHNICAL_WEIGHT = 0.30
 CONFIDENCE_WEIGHT = 0.25
 RR_WEIGHT = 0.15
@@ -19,11 +21,34 @@ def _normalize_metric(value, minimum, maximum):
     except (TypeError, ValueError):
         return 0.0
 
+    if not math.isfinite(value):
+        return 0.0
+
     if maximum == minimum:
         return 50.0
 
     normalized = (value - minimum) / (maximum - minimum) * 100.0
     return max(0.0, min(100.0, normalized))
+
+
+def _finite_values(values):
+    """Return only finite numeric values (drops None / NaN).
+
+    Real scraped CSVs can yield ``None`` or ``NaN`` for a metric
+    (e.g. ``relative_volume`` when the volume series is degenerate), and
+    ``min()`` / ``max()`` raise ``TypeError`` on mixed types.  Ranking
+    bounds are therefore computed over finite values only; missing
+    metrics normalise to 0.0 via ``_normalize_metric``.
+    """
+    out = []
+    for v in values:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(f):
+            out.append(f)
+    return out
 
 
 def _get_pattern_strength_score(stock):
@@ -106,10 +131,10 @@ def rank_market(stocks):
     if not stocks:
         return stocks
 
-    scores = [stock.get("score", 0) for stock in stocks]
-    confidences = [stock.get("confidence", 0) for stock in stocks]
-    rr_values = [stock.get("best_rr", 0) for stock in stocks]
-    volume_values = [stock.get("relative_volume", 0) for stock in stocks]
+    scores = _finite_values(stock.get("score", 0) for stock in stocks)
+    confidences = _finite_values(stock.get("confidence", 0) for stock in stocks)
+    rr_values = _finite_values(stock.get("best_rr", 0) for stock in stocks)
+    volume_values = _finite_values(stock.get("relative_volume", 0) for stock in stocks)
 
     min_score = min(scores) if scores else -10
     max_score = max(scores) if scores else 10

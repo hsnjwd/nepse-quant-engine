@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,7 +31,11 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
-NOTIF_DIR = Path.home() / ".nepse"
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
+NOTIF_DIR = NEPSE_HOME
 NOTIF_FILE = NOTIF_DIR / "notifications.json"
 
 MAX_HISTORY = 500
@@ -135,26 +140,33 @@ class NotificationManager:
         logger.debug("[Notifications] %s: %s", notif.priority.upper(), title)
         return notif
 
-    def notify_portfolio(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> None:
-        self.notify(title, message, "portfolio", priority)
+    def notify_portfolio(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> Notification:
+        """Create a portfolio notification; returns the Notification."""
+        return self.notify(title, message, "portfolio", priority)
 
-    def notify_scanner(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> None:
-        self.notify(title, message, "scanner", priority)
+    def notify_scanner(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> Notification:
+        """Create a scanner notification; returns the Notification."""
+        return self.notify(title, message, "scanner", priority)
 
-    def notify_price(self, symbol: str, title: str, message: str = "") -> None:
-        self.notify(title, message, "price", NotificationPriority.WARNING.value, symbol=symbol)
+    def notify_price(self, symbol: str, title: str, message: str = "") -> Notification:
+        """Create a price alert notification; returns the Notification."""
+        return self.notify(title, message, "price", NotificationPriority.WARNING.value, symbol=symbol)
 
-    def notify_market(self, title: str, message: str = "") -> None:
-        self.notify(title, message, "market", NotificationPriority.INFO.value)
+    def notify_market(self, title: str, message: str = "") -> Notification:
+        """Create a market notification; returns the Notification."""
+        return self.notify(title, message, "market", NotificationPriority.INFO.value)
 
-    def notify_ws(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> None:
-        self.notify(title, message, "websocket", priority)
+    def notify_ws(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> Notification:
+        """Create a WebSocket notification; returns the Notification."""
+        return self.notify(title, message, "websocket", priority)
 
-    def notify_system(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> None:
-        self.notify(title, message, "system", priority)
+    def notify_system(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> Notification:
+        """Create a system notification; returns the Notification."""
+        return self.notify(title, message, "system", priority)
 
-    def notify_trade(self, title: str, message: str = "", priority: str = NotificationPriority.SUCCESS.value) -> None:
-        self.notify(title, message, "trade", priority)
+    def notify_trade(self, title: str, message: str = "", priority: str = NotificationPriority.SUCCESS.value) -> Notification:
+        """Create a trade notification; returns the Notification."""
+        return self.notify(title, message, "trade", priority)
 
     def notify_ai(self, title: str, message: str = "", priority: str = NotificationPriority.INFO.value) -> Notification:
         """Notify about an AI recommendation (Part 7 — AI notifications).

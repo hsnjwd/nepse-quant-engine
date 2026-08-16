@@ -1,12 +1,21 @@
 import pandas as pd
 
 
-def add_volume_average(df, period=20):
+def add_volume_average(df, period=20, inplace=False):
     """
     Calculate average trading volume.
+
+    Args:
+        df: OHLCV DataFrame.
+        period: Look-back window.
+        inplace: When True, mutate and return the same object.
+
+    Returns:
+        DataFrame with a VOLUME_MA column.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     df["VOLUME_MA"] = (
         df["Volume"]
@@ -17,12 +26,20 @@ def add_volume_average(df, period=20):
     return df
 
 
-def add_volume_ratio(df):
+def add_volume_ratio(df, inplace=False):
     """
-    Relative Volume (RVOL)
+    Relative Volume (RVOL).
+
+    Args:
+        df: OHLCV DataFrame.
+        inplace: When True, mutate and return the same object.
+
+    Returns:
+        DataFrame with a RELATIVE_VOLUME column.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     df["RELATIVE_VOLUME"] = (
         df["Volume"]
@@ -33,12 +50,20 @@ def add_volume_ratio(df):
 """
 Run all volume indicators.
 """
-def add_volume_signal(df):
+def add_volume_signal(df, inplace=False):
     """
     Detect unusual volume activity.
+
+    Args:
+        df: OHLCV DataFrame.
+        inplace: When True, mutate and return the same object.
+
+    Returns:
+        DataFrame with a VOLUME_SIGNAL column.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     df["VOLUME_SIGNAL"] = pd.cut(
         df["RELATIVE_VOLUME"],
@@ -60,12 +85,20 @@ def add_volume_signal(df):
     return df
 
 
-def add_volume_score(df):
+def add_volume_score(df, inplace=False):
     """
     Convert volume activity into a score.
+
+    Args:
+        df: OHLCV DataFrame.
+        inplace: When True, mutate and return the same object.
+
+    Returns:
+        DataFrame with a VOLUME_SCORE column.
     """
 
-    df = df.copy()
+    if not inplace:
+        df = df.copy()
 
     score_map = {
         "LOW_VOLUME": -1,
@@ -84,11 +117,11 @@ def add_volume_score(df):
     return df
 
 
-def add_volume_indicators(df):
+def add_volume_indicators(df, inplace=False):
 
-    df = add_volume_average(df)
-    df = add_volume_ratio(df)
-    df = add_volume_signal(df)
-    df = add_volume_score(df)
+    df = add_volume_average(df, inplace=inplace)
+    df = add_volume_ratio(df, inplace=inplace)
+    df = add_volume_signal(df, inplace=inplace)
+    df = add_volume_score(df, inplace=inplace)
 
     return df

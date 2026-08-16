@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.config import DATA_DIRECTORY
-from src.engine.analyzer import analyze_stock
+from src.config import DATA_DIRECTORY, ENABLE_ANALYZE_ALERT_BATCH
+from src.engine.analyzer import analyze_stock, analyze_stock_batch
 from src.portfolio.advisor import build_advice
 from src.portfolio.decisions import portfolio_decision
 from src.portfolio.holdings import load_portfolio
@@ -25,6 +25,23 @@ def analyze_portfolio() -> dict[str, Any]:
     total_value = 0.0
     total_cost = 0.0
 
+    # Sprint 11.9 (Phase 5): when ``ENABLE_ANALYZE_ALERT_BATCH`` is on,
+    # analyze every holding that has data through ``analyze_stock_batch``
+    # so alert state is processed with ONE history read + one atomic
+    # write instead of one per holding.  When the flag is off (default)
+    # the batch helper runs the exact legacy per-symbol alert path, so
+    # ``/api/portfolio`` is byte-identical to pre-Sprint 11.9 behaviour.
+    if ENABLE_ANALYZE_ALERT_BATCH:
+        present_files = [
+            str(Path(DATA_DIRECTORY) / f"{holding['symbol'].lower()}.csv")
+            for holding in holdings
+            if (Path(DATA_DIRECTORY) / f"{holding['symbol'].lower()}.csv").exists()
+        ]
+        analyses = analyze_stock_batch(present_files, use_batch_alerts=True)
+        analyses_by_symbol = {
+            analysis.get("symbol"): analysis for analysis in analyses
+        }
+
     for holding in holdings:
         symbol = holding["symbol"].lower()
         file_path = Path(DATA_DIRECTORY) / f"{symbol}.csv"
@@ -32,7 +49,15 @@ def analyze_portfolio() -> dict[str, Any]:
         if not file_path.exists():
             continue
 
-        analysis = analyze_stock(str(file_path))
+        if ENABLE_ANALYZE_ALERT_BATCH:
+            analysis = analyses_by_symbol.get(symbol.upper())
+            if analysis is None or analysis.get("error"):
+                # A missing/failed analysis is skipped (per-symbol
+                # isolation), matching the legacy skip-on-missing-file
+                # behaviour for the data-present case.
+                continue
+        else:
+            analysis = analyze_stock(str(file_path))
 
         qty = holding["quantity"]
         avg = holding["average_price"]

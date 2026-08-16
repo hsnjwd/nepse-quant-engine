@@ -53,7 +53,15 @@ def run_backtest(
     end_bound: int = max(len(df) - FORWARD_SIMULATION_BUFFER, start_index)
     for i in range(start_index, end_bound):
         history = df.iloc[: i + 1].copy()
-        signal: dict[str, Any] = analyze_dataframe(history)
+        # use_cache=False: the expanding window is a different frame every
+        # iteration, so the indicator cache could never hit — skip the
+        # fingerprint cost (Sprint 11.4).
+        # quality_check=False: the same file's windows are re-analysed
+        # every step; the caller validates the file once before the loop,
+        # so per-window re-validation would be pure overhead (Sprint 13.3
+        # Phase 14 — the full-frame quality gate already ran on the
+        # source data).
+        signal: dict[str, Any] = analyze_dataframe(history, use_cache=False, quality_check=False)
 
         date_val: Any = history.iloc[-1]["Date"].date() if "Date" in history.columns else i
         logger.debug(

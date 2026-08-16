@@ -20,7 +20,6 @@ from src.backtest.metrics import (
     calculate_trade_statistics,
 )
 from src.backtest.trade_simulator import simulate_trade
-from src.engine.analyzer import analyze_dataframe
 from src.logging.logger import logger
 from src.strategies.base import BaseStrategy
 

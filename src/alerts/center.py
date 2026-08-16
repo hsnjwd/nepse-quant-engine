@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-ALERTS_FILE = Path.home() / ".nepse" / "alerts.json"
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
+ALERTS_FILE = NEPSE_HOME / "alerts.json"
 
 # Priority levels
 PRIORITY_CRITICAL = 5
