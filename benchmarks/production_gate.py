@@ -1250,15 +1250,18 @@ def section_bot(
         # API resolves ``<symbol>.csv`` lower-cased, so the analyze
         # target must exist lower-case (matters on case-sensitive
         # filesystems such as Linux CI).  ``scan_market`` derives the
-        # symbol from ``stem.upper()``, so renaming keeps the symbol
-        # ``SYN000`` while the lower-case file resolves everywhere.
-        # NOTE: this is coupled to the probe's hard-coded analyze arg
-        # ``["SYN000"]`` in ``_BOT_CHECK_SCRIPT`` and to
-        # ``benchmarks.common.write_csvs`` naming (``SYN000.csv``) —
-        # if either changes, keep the pair in sync.
-        target = data_dir / "SYN000.csv"
-        if target.exists():
-            target.rename(data_dir / "syn000.csv")
+        # symbol from ``stem.upper()``, so the symbol stays ``SYN000``
+        # while the lower-case file resolves everywhere.
+        # ``benchmarks.common.write_csvs`` now writes lower-case names
+        # directly; the rename below is kept purely as a safety net for
+        # stale fixture copies.  The probe's hard-coded analyze arg
+        # ``["SYN000"]`` in ``_BOT_CHECK_SCRIPT`` stays in sync with
+        # the symbol derivation (``stem.upper()``).
+        target = data_dir / "syn000.csv"
+        if not target.exists():
+            legacy = data_dir / "SYN000.csv"
+            if legacy.exists():
+                legacy.rename(target)
         if not _free_port(port):
             return sec.fail(f"port {port} already bound")
         pool.spawn(data_dir, state_root, port, workers=1)

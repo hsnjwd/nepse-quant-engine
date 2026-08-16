@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v1.0.0-rc8] — 2026-08-16
+
+### Added — Sprint 13.9 (Deployment Hardening, Release Engineering & Operational Continuity)
+
+- **Release manifest** (`data/state/release_manifest.json`).  Deterministic
+  machine-readable record of version, source revision, build id, dependency
+  declarations, Python compatibility, and config/calendar schema versions.
+  Generated atomically with fsync by `scripts/build_release_manifest.py`;
+  verified by `src/utils/release_manifest.verify_manifest`.  Contains no
+  secrets (`src/utils/release_manifest.py`).
+- **Readiness vs liveness probes** — `GET /health/live` (process alive) and
+  `GET /health/ready` (503 until configuration validates, the governed
+  calendar loads, and the cache round-trips; provider outages are
+  informational and never flip readiness).  Legacy `GET /` unchanged
+  (`src/api/health.py`).  Docker api healthcheck moved to `/health/live`.
+- **Configuration validation** — `src/config/validation.py` layers semantic
+  range/coherence checks on the existing `src.config` defaults (no new
+  subsystem): positive scalars, MACD coherence, percentage bounds, URL
+  schemes, explicit boolean values, and the `SECOND_PROVIDER_URL` opt-in
+  contract.  Never raises, never includes values (secrets) in messages;
+  feeds `/health/ready`.  `CONFIG_SCHEMA_VERSION` added to `src.config`.
+- **Persistent-state inventory** — `src/utils/state_inventory.py` registry
+  (owner, format, versioning, atomicity, locking, corruption policy,
+  backup/migration/rollback for 11 stores) + `docs/STATE_INVENTORY.md`.
+- **fsync-aware atomic writes** — `save_json(..., fsync=True)` for
+  critical, low-frequency state (calendar activation, release manifest);
+  hot paths unchanged (`src/utils/json_store.py`).
+- **Release artifact pipeline** — `scripts/build_source_tarball.py`,
+  `scripts/build_release_artifact.sh`, `scripts/verify_release_artifact.py`,
+  `src/utils/release_artifact.py`: content-complete source artifact with
+  secret/local-path/junk scanning and required-file/test enforcement.
+  The exclusion list also drops local workspace metadata (`.freebuff/`),
+  the generated synthetic benchmark corpus (`data/raw/syn*.csv`), and
+  gitignored runtime/build state (`worker_metrics.json`,
+  `nepse_calendar_history.json`, `release_manifest.json`), so an
+  artifact built from a dirty tree matches one built from a clean
+  checkout (Sprint 13.9 §3/§4).
+- **Operational runbook** — `docs/OPERATIONS.md` (startup, shutdown,
+  provider failure/recovery, data-quality degradation, calendar
+  update/rollback, cache/state corruption, worker failure, restart,
+  upgrade, rollback, incident investigation — each symptom → check →
+  action → expected → escalation).
+- **Release checklist** — `docs/RELEASE_CHECKLIST.md` covering tests,
+  performance, security, configuration, state, calendar, providers,
+  Docker, API, scanner, alerts, monitoring, rollback, artifact and git.
+- **CI release validation** — `.github/workflows/release.yml`: clean
+  checkout → install → Sprint 13.x regression + performance gate →
+  artifact build + manifest + smoke test (boot uvicorn, probe
+  `/health/live`, `/health/ready`, `/`, graceful shutdown).  Kept
+  separate from the fast PR test job and the deep soak.
+- **Sprint 13.9 test suite** — `tests/test_sprint13_9.py` (100+ tests):
+  clean startup, invalid configuration, readiness/liveness, graceful
+  shutdown, crash recovery, state inventory, corruption matrix, atomic
+  writes, backup/restore, calendar/watchlist/cache/alert migration,
+  provenance persistence, upgrade compatibility, rollback, Docker static
+  audit, two-worker deployment, metrics/operational-status bounds,
+  secret/configuration checks, release-artifact integrity, dependency
+  reproducibility, performance-constant and Sprint 13.8 regressions.
+
+### Notes
+
+- **VERSION file is stale** — `VERSION` says `1.0.0-rc1` while this
+  changelog is at `v1.0.0-rc7`.  Bump VERSION before tagging (see
+  `docs/RELEASE_CHECKLIST.md`).
+- Docker **runtime** validation (compose build/up, restart, two-worker
+  release artifact) is covered by static audit + the `release.yml` smoke
+  job; a full container run requires a Docker host.
+
+---
+
 ## [v1.0.0-rc7] — 2026-08-16
 
 ### Added — Sprint 13.8 (Platform Soak Testing & Performance Gate Hardening)

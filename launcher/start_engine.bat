@@ -6,7 +6,8 @@ echo       NEPSE QUANT ENGINE
 echo =====================================
 echo.
 
-cd /d C:\Users\User\Documents\nepse-quant-engine
+rem Run from the script's own directory (no hardcoded developer paths).
+cd /d "%~dp0"
 
 echo Launching API...
 start "NEPSE API" cmd /k python launcher\api_launcher.py

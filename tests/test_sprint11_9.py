@@ -62,7 +62,12 @@ def _write_ohlcv(data_dir: Path, name: str, rows: int = 120, seed: int = 1) -> P
             "Volume": rng.integers(1000, 5000, rows),
         }
     )
-    path = data_dir / f"{name}.csv"
+    # Lower-case the filename to match the resolver contract
+    # (``resolve_stock_csv_path`` probes ``{symbol.lower()}.csv``) and
+    # the real corpus naming.  Upper-case fixture files are invisible
+    # to that probe on case-sensitive filesystems (Linux CI) and break
+    # every live ``/analyze``/watchlist path that resolves through it.
+    path = data_dir / f"{name.lower()}.csv"
     path.write_text(df.to_csv(index=False), encoding="utf-8")
     return path
 

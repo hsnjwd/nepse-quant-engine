@@ -1167,14 +1167,24 @@ class NepseCalendar:
         # so the constructor can derive the weekend from ``trading_week``
         # when the file declares only the trading week (Sprint 13.5
         # governed schema — the file is authoritative).
+        # Dates are extracted from BOTH flat ISO strings (v1) and dict
+        # entries with a ``date`` key (v2, optional name/reason/source
+        # metadata) via ``_extract_dates``.  Sprint 13.9: an operator
+        # holiday candidate in the documented dict form is validated and
+        # accepted by ``update_calendar``, so activation must not
+        # silently drop it — pass the extracted dates (never the raw
+        # dicts) into the constructor.
+        holidays, _ = _extract_dates(data.get("holidays"))
+        special_sessions, _ = _extract_dates(data.get("special_sessions"))
+        closures, _ = _extract_dates(data.get("closures"))
         return cls(
-            holidays=data.get("holidays") or (),
+            holidays=holidays,
             weekend_days=data.get("weekend_days"),
             observed_sessions=data.get("observed_sessions"),
             provenance=data.get("provenance") or DEFAULT_CALENDAR_PROVENANCE,
             version=str(version),
-            special_sessions=data.get("special_sessions") or (),
-            closures=data.get("closures") or (),
+            special_sessions=special_sessions,
+            closures=closures,
             effective_from=data.get("effective_from"),
             effective_to=data.get("effective_to"),
             timezone=data.get("timezone") or DEFAULT_TIMEZONE,
@@ -1185,11 +1195,14 @@ class NepseCalendar:
         )
 
     def save(self, path: str | Path | None = None) -> Path:
-        """Persist the versioned calendar to JSON (atomic via json_store)."""
+        """Persist the versioned calendar to JSON (atomic, fsync-backed)."""
         from src.utils.json_store import save_json  # noqa: PLC0415 - lazy
 
         target = Path(path) if path else Path(NEPSE_CALENDAR_FILE)
-        save_json(target, self.to_dict(), log_name="NepseCalendar")
+        # fsync=True: the governed calendar is critical, low-frequency
+        # state — durability before the atomic replace is worth the
+        # cost here (Sprint 13.9 §14).
+        save_json(target, self.to_dict(), log_name="NepseCalendar", fsync=True)
         return target
 
     @classmethod

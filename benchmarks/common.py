@@ -37,12 +37,21 @@ def make_synthetic_df(rows: int = 500, seed: int = 42, start: str = "2023-01-02"
 
 
 def write_csvs(data_dir: Path, symbols: int, rows: int) -> list[Path]:
-    """Write *symbols* synthetic OHLCV CSVs into *data_dir*."""
+    """Write *symbols* synthetic OHLCV CSVs into *data_dir*.
+
+    File names are lower-case (``syn000.csv``) to match the real corpus
+    and the resolver contract (``resolve_stock_csv_path`` probes the
+    lower-cased symbol).  On case-sensitive filesystems such as Linux
+    CI an upper-case fixture file would be invisible to that probe and
+    break every live ``/analyze/SYN000`` path; ``scan_market`` and the
+    CSV provider still derive the canonical ``SYN000`` symbol from
+    ``stem.upper()``.
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for i in range(symbols):
         df = make_synthetic_df(rows=rows, seed=1000 + i)
-        path = data_dir / f"SYN{i:03d}.csv"
+        path = data_dir / f"syn{i:03d}.csv"
         df.to_csv(path, index=False)
         paths.append(path)
     return paths

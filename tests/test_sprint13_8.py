@@ -1244,7 +1244,7 @@ class TestNotificationSoak:
 # ───────────────────────────────────────────────────────────────────
 
 
-class TestScannerSoak:
+class TestScannerSoakX:
     def test_repeated_scan_stable(self, tmp_path):
         from src.scanner import engine as scanner_engine
         from benchmarks.pipeline import _state_files
@@ -1851,15 +1851,22 @@ class TestSubprocessCleanup:
             _request(port, "/")
         finally:
             _shutdown(p1)
-        # Rebind the same port — must succeed.  Windows socket release
-        # can lag a few hundred ms after the worker exits, so retry
-        # briefly instead of asserting on the first probe.
+        # Rebind the same port — must succeed.  The probe mirrors how a
+        # real redeploy binds (uvicorn sets SO_REUSEADDR): a bare bind()
+        # can fail for up to 2*MSL while the previous worker's accepted
+        # connection sockets are in TIME_WAIT even though no listener
+        # remains — exactly the state a second deployment must tolerate.
+        # A live listener still fails a SO_REUSEADDR bind, so the probe
+        # keeps its safety meaning.  Windows socket release can also lag
+        # a few hundred ms after the worker exits, so retry briefly
+        # instead of asserting on the first probe.
         import time as _time
 
         rebound = False
         for _ in range(20):
             try:
                 with socket.socket() as probe:
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     probe.bind(("127.0.0.1", port))
                 rebound = True
                 break

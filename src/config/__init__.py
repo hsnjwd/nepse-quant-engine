@@ -14,6 +14,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==============================
+# Configuration Schema
+# ==============================
+
+# Version of the *configuration schema* itself (Sprint 13.9 §5).  Bump
+# when keys are added/renamed/removed or semantics change so the release
+# manifest and operators can reason about forward compatibility.  This
+# is metadata only — it changes no runtime behaviour.
+CONFIG_SCHEMA_VERSION = "1.0"
+
+# ==============================
 # Telegram
 # ==============================
 

@@ -85,7 +85,10 @@ services:
       - app_logs:/app/logs
     logging: *default-logging
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      # Liveness probe (Sprint 13.9 §9): process-up signal.  Readiness
+      # is separately exposed at /health/ready (503 until critical
+      # initialization — config, calendar, cache — is sound).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
       interval: 30s
       timeout: 10s
       retries: 3

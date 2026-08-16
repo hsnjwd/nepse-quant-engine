@@ -384,6 +384,7 @@ def save_json(
     indent: int = 4,
     sort_keys: bool = False,
     log_name: str = "json_store",
+    fsync: bool = False,
 ) -> None:
     """Atomically write *data* as UTF-8 JSON to *path*.
 
@@ -398,6 +399,13 @@ def save_json(
         indent: Pretty-print indentation (``None`` for compact output).
         sort_keys: Sort object keys for deterministic output.
         log_name: Component name used in log messages.
+        fsync: When True, ``flush()`` + ``os.fsync()`` the temp file
+            *before* the atomic replace (Sprint 13.9 §14).  Used only
+            for critical, low-frequency state (calendar activation,
+            release manifest) where durability of the write matters
+            more than throughput — deliberately NOT enabled on the hot
+            paths (watchlist/alerts/metrics) where the cost is not
+            justified by the risk.
 
     Raises:
         OSError: If the directory cannot be created or the write fails.
@@ -410,6 +418,9 @@ def save_json(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=indent, sort_keys=sort_keys)
+            if fsync:
+                f.flush()
+                os.fsync(f.fileno())
         _replace_atomic(tmp_path, p, log_name)
     except BaseException:
         try:

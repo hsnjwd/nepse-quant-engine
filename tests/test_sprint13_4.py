@@ -1073,7 +1073,9 @@ class TestScannerMixedQuality:
                     end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=rows
                 )
                 df.loc[df.index[-1], "Close"] = -1.0
-                df.to_csv(data_dir / f"SYN{i:03d}.csv", index=False)
+                # Lower-case to match write_csvs naming (case-sensitive
+                # filesystems: an upper-case twin would double the stem).
+                df.to_csv(data_dir / f"syn{i:03d}.csv", index=False)
 
     def test_mixed_universe_healthy_ranked_conflicted_skipped(self, tmp_path, monkeypatch):
         from src.scanner.engine import scan_market
@@ -1193,7 +1195,10 @@ class TestApiMetrics:
         df["Date"] = pd.bdate_range(
             end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=len(df)
         )
-        df.to_csv(data_dir / "SYN000.csv", index=False)
+        # Lower-case fixture: the resolver probes the lower-cased symbol
+        # and case-sensitive filesystems (Linux CI) need the file to
+        # exist under that exact name.
+        df.to_csv(data_dir / "syn000.csv", index=False)
         monkeypatch.setattr("src.loaders.csv_loader.DATA_DIRECTORY", str(data_dir))
         with TestClient(app) as client:
             resp = client.get("/analyze/SYN000")

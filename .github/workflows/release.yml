@@ -1,139 +1,127 @@
-# =====================================================================
-# NEPSE Quant Engine — Release Workflow
-# =====================================================================
-# Runs on:
-#   - Push to main/master: runs tests, builds Docker image
-#   - Tag v*.*.*:       builds, tags, and pushes Docker image to GHCR
-# =====================================================================
+name: Release Validation
 
-name: Release
+# Sprint 13.9 §24 — release validation is deliberately SEPARATE from the
+# fast PR test job (ci.yml) and from the deep soak.  This workflow runs
+# on merges to main/develop, version tags, and manual dispatch, and
+# validates the full release pipeline on a clean checkout:
+#
+#   clean checkout → install → test → benchmark gate
+#                 → release manifest → release artifact → smoke test
+#
+# It does NOT run the deep soak (Sprint 13.8) — that stays a manual
+# release-candidate gate.
 
 on:
   push:
-    branches: [main, master]
-    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
-  pull_request:
-    branches: [main, master]
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+    branches: [main, develop]
+    tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
-  # ── Test ────────────────────────────────────────────────────────
-  test:
+  release-validation:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Verify compilation
-        run: python -m compileall src/
+        run: python -m compileall -q src
 
-      - name: Run tests
-        run: python -m pytest tests/ -q --tb=short
-        env:
-          PYTHONPATH: ${{ github.workspace }}
+      - name: Run Sprint 13.9 release tests
+        run: python -m pytest tests/test_sprint13_9.py -q
 
-  # ── Docker Build ────────────────────────────────────────────────
-  build:
-    needs: [test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
-            type=sha,prefix=,suffix=,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          target: web
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-
-  # ── (Optional) Release Artifact ─────────────────────────────────
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate release notes
-        id: notes
+      - name: Run combined Sprint 13.2–13.9 regression + performance suite
         run: |
-          cat <<'EOF' > release_notes.md
-          ## NEPSE Quant Engine ${{ github.ref_name }}
+          python -m pytest \
+            tests/test_sprint13_2.py \
+            tests/test_sprint13_3.py \
+            tests/test_sprint13_4.py \
+            tests/test_sprint13_5.py \
+            tests/test_sprint13_6.py \
+            tests/test_sprint13_7.py \
+            tests/test_sprint13_8.py \
+            tests/test_sprint13_9.py \
+            tests/test_performance.py -q
 
-          ### Changes
-          See [CHANGELOG.md](docs/CHANGELOG.md) for the full changelog.
+      - name: Run deterministic performance gate
+        run: python -m benchmarks.ci_gate --factor 3.0 --out benchmark-ci.json
 
-          ### Docker Image
-          Pull the image from GitHub Container Registry:
-          ```bash
-          docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-          ```
+      - name: Build release manifest
+        run: python3 scripts/build_release_manifest.py
 
-          ### Quick Start
-          ```bash
-          docker compose up -d web
-          ```
-          EOF
+      - name: Build release artifact
+        run: sh scripts/build_release_artifact.sh dist/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: Release ${{ github.ref_name }}
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
-          generate_release_notes: true
-          files: |
-            Dockerfile
-            docker-compose.yml
+          name: nepse-quant-engine-release
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Deployment smoke test (uvicorn lifecycle)
+        run: |
+          python3 - <<'PY'
+          import json, os, signal, subprocess, sys, time, urllib.request
+          from pathlib import Path
+
+          repo = Path.cwd()
+          tmp = repo / ".pytest_tmp" / "release-smoke"
+          tmp.mkdir(parents=True, exist_ok=True)
+          port = 8931
+          env = dict(os.environ)
+          env["NEPSE_HOME"] = str(tmp / "home")
+          env["WORKER_METRICS_FILE"] = str(tmp / "worker_metrics.json")
+
+          def get(path, timeout=5):
+              with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout) as r:
+                  return r.status, json.loads(r.read())
+
+          proc = subprocess.Popen(
+              [sys.executable, "-m", "uvicorn", "src.api.main:app",
+               "--host", "127.0.0.1", "--port", str(port)],
+              cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+          )
+          try:
+              deadline = time.time() + 90
+              live = ready = root = None
+              while time.time() < deadline and proc.poll() is None:
+                  try:
+                      if live is None:
+                          live = get("/health/live")
+                      if ready is None:
+                          ready = get("/health/ready")
+                      if root is None:
+                          root = get("/")
+                      if live and ready and root:
+                          break
+                  except Exception:
+                      time.sleep(1)
+              assert live and live[0] == 200, f"/health/live failed: {live}"
+              assert ready and ready[0] == 200, f"/health/ready failed: {ready}"
+              assert root and root[0] == 200, f"/ failed: {root}"
+              assert root[1] == {"status": "NEPSE Quant Engine Running"}
+              print("smoke: live+ready+root OK")
+          finally:
+              if proc.poll() is None:
+                  proc.send_signal(signal.SIGTERM)
+                  try:
+                      rc = proc.wait(timeout=30)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      rc = proc.wait()
+                  assert rc == 0, f"graceful shutdown failed (rc={rc})"
+                  print("smoke: graceful shutdown OK")
+          PY

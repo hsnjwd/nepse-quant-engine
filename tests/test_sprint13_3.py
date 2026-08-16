@@ -67,7 +67,10 @@ def _write_fresh_csvs(data_dir, symbols: int, rows: int) -> None:
         df["Date"] = pd.bdate_range(
             end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=rows
         )
-        df.to_csv(data_dir / f"SYN{i:03d}.csv", index=False)
+        # Lower-case fixture names: the resolver probes the lower-cased
+        # symbol, and case-sensitive filesystems (Linux CI) would not
+        # find an upper-case file.
+        df.to_csv(data_dir / f"syn{i:03d}.csv", index=False)
 
 
 def _broken_frame(rows: int = 60, seed: int = 9) -> pd.DataFrame:
@@ -793,7 +796,7 @@ class TestScannerSafety:
             end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=len(df)
         )
         df.loc[df.index[-1], "Close"] = -1.0
-        df.to_csv(data_dir / "SYN000.csv", index=False)
+        df.to_csv(data_dir / "syn000.csv", index=False)
 
         monkeypatch.setattr("src.scanner.engine.DATA_DIRECTORY", str(data_dir))
         out = scan_market(workers=1)
