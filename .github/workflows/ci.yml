@@ -34,3 +34,43 @@ jobs:
       - name: Run unit test suite
         run: |
           python -m pytest -v
+
+  benchmark:
+    # Sprint 11.6 + 11.7 + 11.8 + 11.9 — CI benchmark regression gate.
+    # Detects *severe* performance regressions on a small deterministic
+    # synthetic corpus with four conceptual checks (see
+    # benchmarks/ci_gate.py):
+    #   1. cold-load regression  (checks.cold_load — baseline x 3.0)
+    #   2. warm scanner          (checks.warm_scan — cache-bypass ratio)
+    #   3. warm /api/analyze     (checks.warm_api — cache-bypass ratio)
+    #   4. warm /api/portfolio   (checks.warm_portfolio — cache-bypass
+    #      ratio, Sprint 11.9)
+    # The gate is deliberately non-flaky: min-of-3 metrics absorb noise,
+    # and relative checks absorb runner-to-runner variance.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run performance regression gate
+        run: |
+          python -m benchmarks.ci_gate --factor 3.0 --out benchmark-ci.json
+
+      - name: Upload benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-ci
+          path: benchmark-ci.json
+          if-no-files-found: error

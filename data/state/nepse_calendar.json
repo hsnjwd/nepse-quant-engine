@@ -1,0 +1,19 @@
+{
+    "calendar_version": "2.0",
+    "effective_from": "2024-01-01",
+    "effective_to": "2027-12-31",
+    "timezone": "Asia/Kathmandu",
+    "trading_week": [0, 1, 2, 3, 6],
+    "weekend_days": [4, 5],
+    "holidays": [],
+    "special_sessions": [],
+    "closures": [],
+    "provenance": {
+        "source": "NEPSE trading schedule (Sunday-Thursday open, Friday-Saturday closed) — long-standing exchange schedule documented by NEPSE itself",
+        "notes": "Weekend rule only in this shipped baseline. Holiday/special-session/closure lists are operator-maintained: add documented Nepali public holidays (Dashain, Tihar, etc.) with a name and source before relying on them. No holiday is asserted without documented provenance.",
+        "observed_sessions_note": "Observed trading sessions are derived at runtime from the validated corpus (NepseCalendar.from_corpus); they are not embedded here."
+    },
+    "source": "NEPSE trading schedule (Sun-Thu); operator-maintained governed calendar",
+    "operator_notes": "Operator-maintained baseline. Populate holidays/special_sessions/closures with dated entries (each entry may carry name/source/reason). Bump calendar_version and update last_validated whenever the contents change.",
+    "last_validated": "2026-08-14"
+}

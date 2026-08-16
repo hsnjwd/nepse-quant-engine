@@ -7,6 +7,339 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v1.0.0-rc7] — 2026-08-16
+
+### Added — Sprint 13.8 (Platform Soak Testing & Performance Gate Hardening)
+
+- **Performance-gate flake root-caused and eliminated without weakening any
+  threshold.** The Sprint 13.2 cold/warm speedup flake was traced to two
+  harness defects, not the engine: (1) `ScannerCache._file_fingerprint`
+  performed a `Path.resolve()` filesystem syscall per file per rep — pure
+  fixed overhead that inflated both legs but hurt the light warm leg
+  disproportionately under I/O interference; removed (fingerprints are
+  content+stat based, resolution adds no change-detection value).
+  (2) Measurement legs ran 5 consecutive cold reps then 5 consecutive warm
+  reps, so a slow machine phase could hit only one leg and corrupt the
+  ratio.  Legs now use **interleaved cold/warm pairing** — each pair samples
+  the same machine conditions, and the reported ratio is the median of
+  per-pair ratios.  Verified: 10/10 isolated gate runs, 3/3 post-fix runs,
+  plus a controlled 4-way CPU-contention run, all PASS (speedup 14.8–22.3x
+  vs the 5x requirement; warm API ratio 0.590–0.677 vs ≤0.75 cap; warm
+  portfolio ratio 0.619–0.653 vs ≤0.75 cap; analyze p99 65.8–189.8 ms vs
+  ≤2000 ms cap).  No acceptance threshold changed.
+- **Environmental contention detection with a single justified rerun**
+  (`benchmarks/ci_gate.py`) — the gate probes wall-vs-CPU-time ratio and an
+  alert-history file I/O micro-benchmark at pre/mid/post leg boundaries and
+  between every cold/warm pair.  A failing pass reruns **once** only when a
+  probe exceeds its documented threshold (wall/cpu ≥ 1.5, I/O ≥ 45 ms); the
+  rerun applies the identical 5x / 0.75 / 0.75 / 2000 ms requirements.
+  This is not "retry until lucky": a rerun is triggered only by a measured
+  environmental signal, and the same gate must pass on the retry.  The I/O
+  probe is a bounded alert-history read+write (the dominant fixed per-call
+  cost in the light warm legs) sampled min-of-3 per point so single-sample
+  AV jitter (which spikes to ~80 ms on this box) cannot false-trigger.
+- **Soak framework** (`benchmarks/soak.py`) — bounded, hermetic, offline
+  platform soak.  `SOAK_ITERATIONS` / `--iterations` configurable
+  (default 25); CI keeps a short bounded run, deeper runs are opt-in.
+  Five scenarios: **A** normal `get_history → analyze → scan → metrics`
+  loop; **B** primary healthy → unavailable → fallback → recovery;
+  **C** AGREE / MATERIAL / AGREE / MAPPING_CONFLICT / AGREE injection;
+  **D** cold / warm / invalidate / cold / warm cache cycles;
+  **E** worker start → request → stop → restart → request.  Every scenario
+  runs the real hermetic in-process pipeline (the same code path the CI
+  gate exercises), never a simulation.  Reports per-scenario verdicts,
+  bounded-state deltas (incidents, minor symbols, quality snapshots,
+  notifications, scanner cache), resource deltas (threads, open file
+  objects, temp/lock/corrupt litter), and a tracemalloc memory envelope
+  (plateau median vs end, 8 MiB cap).
+- **Hermetic soak baselines** — the soak resets exactly the process-global
+  bounded state it measures (`reconciliation_metrics`, `quality_trends`,
+  incident ring, notification centre, caches) at entry so suite residue
+  from earlier tests cannot fail absolute bound checks, and clears the
+  process-wide scanner/indicator caches at exit.  Temp workspaces are
+  always removed on both success and failure paths.
+- **Windows pytest session-crash fixed** — the full-suite session crashed
+  on Windows when pytest tried to clean the system `pytest-current`
+  junction (a broken/stale junction in the OS temp dir).  Tests now use a
+  project-local `basetemp` (`.pytest_tmp/`, gitignored) via a
+  `pytest_configure` hook in `tests/conftest.py`, which also isolates all
+  suite temp state inside the repo (no system-temp litter).
+- **Two-worker aggregation race fixed** (`tests/test_sprint13_2.py`) — the
+  worker-metrics aggregation test asserted the aggregate equals the local
+  request counter immediately, but worker self-reports are throttled to
+  every 5 s, so the aggregate can legitimately lag by one window.  The test
+  now settles the report throttle before asserting (harness fix; no
+  production change, no threshold change).
+- **Soak-in-suite contamination fixed** — `test_temp_dirs_cleaned_by_soak`
+  failed in-suite because prior tests legitimately populated the
+  process-global incident ring; resolved by the hermetic baseline reset
+  above (test passes alone and in-suite).
+- **Measurement-hardening of a Sprint 12 test** —
+  `test_portfolio_times_includes_warm_percentiles` asserted a cold/warm
+  ratio from only 2 reps (median-of-2 has no outlier resistance, flipped to
+  1.078 under transient load).  Bumped to the gate's 5-rep protocol — the
+  ratio is now stable at 0.49–0.61.  Assertion (warm < cold) unchanged.
+- **Regression tests** (`tests/test_sprint13_8.py`, now 102 tests):
+  load-leg statistic is median-not-min, fingerprint change behaviour
+  (content+stat, no per-call resolve), I/O-probe trigger + smoke tests,
+  contention protocol (rerun used only when a probe exceeds threshold),
+  soak scenarios, memory bounds, file/resource leaks, subprocess cleanup,
+  metrics/incident/notification bounds.
+
+### Verified (measured, this sprint)
+
+- **Full suite: 3051 passed, 2 skipped** (3053 collected) — includes the
+  102-test Sprint 13.8 file, 57-test Sprint 13.2 file, and the 744-test
+  combined 13.2–13.8 + performance regression.
+- **Soak: 60 iterations PASS** — 269 s, zero state growth (threads +0,
+  file objects +0, incidents +0, minor symbols +0, quality snapshots +0,
+  notifications +0), no temp/lock/corrupt litter, memory growth 0.077 MiB
+  (plateau 2.128 → end 2.205 MiB, 8.0 MiB envelope; growth decelerates and
+  plateaus — end-of-soak memory at 60 iterations ≈ 25 iterations).
+- **Benchmark reproducibility** — 10/10 + 3/3 gate runs PASS; controlled
+  4-way CPU contention run PASS with the environmental signal measured and
+  recorded (wall/cpu 1.293, I/O probe 66 ms > 60 ms threshold at the time;
+  threshold since tightened to 45 ms with between-pair probes).
+- **No state contamination** across provider failure/recovery, fallback,
+  minor/material/mapping conflicts, calendar validation, cache hit/miss,
+  worker restart, and notification activity under repeated execution.
+
+---
+
+## [v1.0.0-rc6] — 2026-08-14
+
+### Added — Sprint 13.6 (Production Readiness, Provider Diversity & Operational Observability)
+
+- **Second-provider adapter** (`src/data/providers.py`) — `GitHubCSVProvider`
+  implements the existing `BaseProvider` interface; disabled unless
+  `SECOND_PROVIDER_URL` is set (empty URL keeps the chain byte-identical).
+  **Live two-provider reconciliation remains NOT AVAILABLE** — no second
+  independent source has been validated here; the adapter + controlled
+  harness prove the architecture is provider-ready without claiming live
+  multi-provider verification.
+- **Provider reliability history** (`src/data/health.py`) — bounded per-provider
+  outcome window, `record_success/timeout/malformed/failure/empty`, degradation
+  states `HEALTHY/DEGRADED/UNAVAILABLE/UNKNOWN` with configurable triggers,
+  automatic recovery, and compact `reliability_history()` snapshots.
+- **Incident tracking** (`src/data/incidents.py`, NEW) — bounded event ring
+  (200 max), per-kind counters, repeated-minor detection; material/mapping/
+  timeout/fallback/identity incidents observable via `/metrics`.
+- **Data-quality trend observability** (`src/data/quality.py`) — bounded
+  `QualityTrendTracker` with previous/current/delta corpus aggregates.
+- **Calendar governance workflow** (`src/data/calendar.py`) —
+  `validate_candidate_calendar` (schema + overlap-compatibility + weekend
+  regression), `update_calendar` (validate → backup → atomic activate →
+  version history), `rollback_calendar` (never blocked by an incompatible
+  current calendar; reversible).
+- **Operational status** (`src/data/operational_status.py`, NEW) — derived
+  `system_status()` (HEALTHY/DEGRADED/UNAVAILABLE) from existing state; no
+  duplicate monitoring subsystem.
+- **/metrics blocks** (`src/api/metrics.py`) — bounded `provider_health`
+  (reliability + degradation), `reconciliation.incidents`,
+  `data_quality.trend`, `calendar.updates`, `system_status`; backward
+  compatible and safe when empty.
+- **Tests** — `tests/test_sprint13_6.py` (136 tests, 21 categories):
+  second-provider adapter, degradation/recovery, incidents, quality trends,
+  calendar update/rollback, cache restart/corruption, signal safety,
+  scanner/alert safety, metrics compatibility, bounded stability, Docker
+  config, regression coverage.
+
+### Notes
+
+- Provider degradation is deliberately conservative: a single failure never
+  disables a provider; thresholds are configurable; recovery is automatic.
+- Conflicted outcomes are never cached as trusted; fallback and reconciliation
+  provenance survive process restart.
+- Performance gate passes in isolation: warm API ratio 0.413, warm portfolio
+  ratio 0.576 (max 0.75), analyze p99 105.46 ms (max 2000 ms).
+
+---
+
+## [v1.0.0-rc5] — 2026-08-14
+
+### Added — Sprint 13.5 (Production Data Trust, Calendar Governance & Reliability)
+
+- **Benchmark/test determinism** — `bench_startup()` records subprocess
+  failures instead of raising (the informational startup metric can never
+  fail the runner); `benchmark_isolation` context manager (`benchmarks/common.py`)
+  redirects alert/portfolio persistence to a temp dir, snapshots/restores the
+  scanner `DATA_DIRECTORY`, clears the scanner cache on entry/exit, resets the
+  `DataService` singleton, and serialises the global-mutating sections with an
+  `RLock` so concurrent benchmark runs are safe.  `scripts/benchmarks.py::run_all`
+  runs its corpus legs inside the isolation context.  Six regression tests
+  (`test_benchmark_runner_isolated_state`, `_repeatable`, `_concurrent`,
+  `_startup_error`, plus smoke + isolation-context tests) prove isolated /
+  repeated / concurrent execution — the full-suite timing flake is eliminated.
+- **Versioned, provenance-aware NEPSE trading calendar** (`src/data/calendar.py`
+  v2 + `data/state/nepse_calendar.json`) — governed schema: `calendar_version`
+  (supported `1.0`/`2.0`), `effective_from/effective_to`, `timezone`,
+  `trading_week`, explicit `holidays`, `special_sessions` (trading days on
+  weekends/holidays), `closures` (exceptional closures), `provenance`,
+  `last_validated`, `source`, `operator_notes`.  Holidays are **not** hard-coded
+  in Python; the shipped baseline documents the Sun–Thu weekend rule with honest
+  provenance and zero fabricated holidays.  `classify_date` returns
+  `SPECIAL_SESSION` / `EXCEPTIONAL_CLOSURE`; `is_trading_day` respects both.
+- **Calendar governance** — `validate_calendar_data` returns diagnostics (never
+  raises, including on non-mapping payloads): unsupported versions, invalid date
+  ranges, malformed/duplicate entries, contradictory holiday/session/closure
+  definitions, out-of-range weekdays (checked pre-modulo so `9` is rejected,
+  not silently mapped to Tuesday), redundant weekend closures, and missing
+  provenance.  `NepseCalendar.load` **fails safe**: a malformed calendar is
+  rejected with logged diagnostics and the base weekend-rule calendar is used —
+  a broken calendar can never silently turn an exchange closure into a normal
+  trading day.  Bounded `to_status()` / `coverage_for()` expose version / window /
+  last-validated / source / counts — never raw date lists (safe for `/metrics`).
+- **Data provenance / trust state** (`src/data/provenance.py` + `StockHistory.provenance`)
+  — compact, bounded metadata attached to every history result and analysis:
+  trust states `trusted / reconciled / single_provider / fallback /
+  partially_reconciled / conflicted / unavailable / stale / calendar_invalid /
+  quarantined`; `resolve_trust` is worst-state-wins; `provenance_from_history` /
+  `provenance_from_reconciliation` build the state from pipeline signals
+  (including `calendar_valid=False` derived from calendar-invalid records).
+  The trust state survives Provider → DataService → Reconciliation → Quality →
+  Analyzer → Signal: `get_history` / `get_history_batch` (incl. cache hits) and
+  `get_reconciled_history` attach provenance, and `analyze_dataframe` suppresses
+  the signal to HOLD for any unsafe trust (conflicted / unavailable /
+  calendar-invalid / quarantined).
+- **Reconciliation observability** — `/metrics` gains bounded `provider_health`
+  (per-provider enabled / success-rate / requests / failures / consecutive
+  failures / last-success age / latency from the existing `ProviderHealthMonitor`
+  — no second health architecture) and bounded `calendar` status blocks.  The
+  existing `reconciliation` + `data_quality` scalar counters remain; nothing
+  unbounded is exposed.
+- **Cache safety** — reconciled entries embed their reconciliation state and a
+  `MATERIAL_DISAGREEMENT` / `MAPPING_CONFLICT` outcome is **never** cached as a
+  trusted frame; fallback-served data carries `fallback_used=True` provenance so
+  it can never masquerade as primary data.  `TieredCache`/`MemoryCache`/`DiskCache`
+  gained `delete_prefix` (with an alphanumeric boundary guard so clearing
+  `reconciled:NABIL:365` never deletes `reconciled:NABIL:3650`);
+  `DataService.clear_reconciled_cache()` does targeted invalidation (exact-key
+  delete for a symbol+horizon, prefix delete otherwise) without evicting the rest
+  of the cache.
+- **Calendar-aware quality** — `assess_history(..., calendar=...)` flags rows on
+  governed non-trading days (weekend / configured holiday / exceptional closure)
+  as `R_NON_TRADING_DATE` error-level issues with a `calendar_invalid_records`
+  counter (double-count-guarded against the price/date invalid masks).  Special
+  sessions are trading days; UNKNOWN days are reported via `unknown_sessions` but
+  never flagged.  New listings do not raise false missing-session alarms.
+- **Reliability hardening** — `HybridProvider.fallback_used` tracks the *current*
+  request's fallback (resets per call, so a recovered primary is never mislabelled);
+  `reconcile_history` returns a canonical empty frame (no `KeyError`) when every
+  date is materially conflicted; `validate_calendar_data` never crashes on junk.
+- **Sprint 13.5 test suite** (`tests/test_sprint13_5.py`) — 121 behavioral tests
+  across 17 categories (benchmark determinism, calendar loading/validation/
+  provenance/holidays/special sessions, data provenance, provider health,
+  reconciliation + fallback metrics, failure injection for providers/
+  reconciliation/calendar/cache, cache provenance + safety, signal safety, API
+  compatibility, no-silent-degradation, calendar-aware quality, and Sprint 13.4
+  regression), including a real-corpus gate (skipped when the corpus is absent)
+  and an end-to-end calendar-invalid → signal-suppression proof.
+
+---
+
+## [v1.0.0-rc4] — 2026-08-13
+
+### Added — Sprint 13.4 (Cross-Provider Reconciliation & Trading Calendar Integrity)
+- **Cross-provider reconciliation** (`src/data/reconciliation.py`) — the engine now moves from *provider priority wins* to *reconcile before trust*.  Multiple providers' records for the same symbol/date are normalized to canonical OHLCV fields and compared field-by-field with per-field tolerances: price fields use a tight relative bound (default 1%) while volume uses a wider one (default 10%) — never one fixed percentage for every field (all configurable).  Explicit statuses: ``AGREE`` (validated data), ``MINOR_DISAGREEMENT`` (resolved to the documented preferred source + warning — **never averaged**), ``MATERIAL_DISAGREEMENT`` (never becomes a trusted record), ``UNAVAILABLE`` (fallback), ``MAPPING_CONFLICT`` (records for different securities are never compared).
+- **Reconciliation policy** — AGREE → validated data; MINOR → preferred source + warning/provenance; MATERIAL → conflicting dates dropped from merged history and quarantined (the record never silently becomes a normal signal); UNAVAILABLE → fallback; MAPPING_CONFLICT → no signal.  ``ReconciliationResult`` carries structured provenance (status, symbol, date, providers, selected_source, disagreement_fields, difference_metrics, warnings) and never exposes raw provider payloads.
+- **Symbol/company mapping validation** — ``check_symbol_mapping`` verifies every provider record refers to the *same security* (canonical symbol + company identity) *before* any value comparison; a mismatched identifier or a company-name disagreement yields ``MAPPING_CONFLICT``.
+- **Corporate-action awareness** — ``classify_price_jump`` distinguishes a *large-but-potentially-legitimate* move (dividend / right / bonus / split; threshold ``RECONCILE_CORPORATE_ACTION_MOVE_PCT=20``) from *structurally-impossible* OHLC; a large-but-sound move is flagged and annotated, never quarantined by the reconciliation layer.
+- **History-wide reconciliation** — ``reconcile_history`` merges full frames from all providers per-date (dtype-safe Date handling, canonical capitalized OHLCV output); materially-conflicting dates are dropped (never averaged) and reported; ``HybridProvider.get_reconciled_history`` queries **every** healthy provider (additive — the fail-fast ``get_history`` fallback chain is untouched) with per-provider validation and bounded metrics; ``DataService.get_reconciled_history`` returns the trusted frame **with provenance attached**.
+- **Cache provenance** — reconciled frames are cached under a dedicated namespace with their reconciliation state; a ``None`` frame is never cached, a previously-conflicted record can never silently become trusted data, and a refresh after conflict serves the new reconciled state.
+- **Signal safety** — ``analyze_dataframe(..., reconciliation=...)`` attaches an additive ``reconciliation`` block; an unresolved ``MATERIAL_DISAGREEMENT`` / ``MAPPING_CONFLICT`` suppresses the signal to HOLD (``signal_suppression_reason`` reflects the reconciliation state) — a provider conflict never silently becomes a BUY/SELL, even on an otherwise VALID frame.
+- **NEPSE trading calendar** (`src/data/calendar.py`) — centralized calendar abstraction with explicit provenance: NEPSE trades **Sunday–Thursday** (Friday/Saturday closed), operator-maintained versioned holidays (none hard-coded without provenance), and **corpus-derived observed sessions** as the strongest available evidence.  Day classification ``TRADING_DAY / HOLIDAY / WEEKEND / UNKNOWN``; gap classification distinguishes ``EXPECTED_NON_TRADING_DAY`` (weekend/holiday/corpus-verified closure) from ``MISSING_TRADING_SESSION`` (scheduled session with no record, confirmed by the corpus) and ``UNKNOWN`` (no evidence — the engine prefers explicit uncertainty over guessing).  ``expected_sessions`` / ``previous_trading_day`` / ``next_trading_day`` / versioned JSON persistence.
+- **Calendar-aware continuity** — ``assess_history(..., calendar=...)`` uses trading-session semantics for gap detection: a Friday/Saturday closure is never reported as missing data, while a genuinely-missing scheduled session increments ``report.missing_sessions``.  The legacy business-day heuristic remains the default for existing callers (byte-identical behaviour); the corpus report and reconciliation paths pass the calendar explicitly.
+- **Bounded reconciliation metrics** — thread-safe ``ReconciliationMetricsCollector`` (provider_requests/successes/failures/timeouts, fallback_count, reconciliation_checks, agreements, minor/material disagreements, mapping_conflicts, quarantined_conflicts) surfaced through ``GET /metrics`` under the additive ``reconciliation`` block; scalar-only, all existing keys preserved.
+- **Config** — ``RECONCILE_PRICE_TOLERANCE_PCT=1.0``, ``RECONCILE_VOLUME_TOLERANCE_PCT=10.0``, ``RECONCILE_MATERIAL_PRICE_PCT=5.0``, ``RECONCILE_MATERIAL_VOLUME_PCT=50.0``, ``RECONCILE_PREFERRED_SOURCE=api``, ``RECONCILE_CORPORATE_ACTION_MOVE_PCT=20.0``, ``NEPSE_CALENDAR_FILE=data/state/nepse_calendar.json``.
+- **Sprint 13.4 test suite** (`tests/test_sprint13_4.py`) — 94 tests covering repair/idempotency, reconciliation (identical / small / material / unavailable / timeout / malformed / volume vs price / multiple providers), symbol mapping, corporate actions, the trading calendar (weekend / holiday / unknown / missing / consecutive missing / future date), history-wide reconciliation, bounded metrics, signal safety (AGREE / MINOR / MATERIAL / MAPPING / UNAVAILABLE), cache provenance, scanner mixed-quality behaviour, the /metrics reconciliation block and the additive API contract.
+
+### Notes
+- The 65 Sprint 13.3 quarantined CSVs were repaired (zero-price 2026-07-24 rows removed, backup preserved, idempotent) — 2026-07-24 is a **Friday** (NEPSE is closed Fri/Sat), so the repair created **no** missing trading session under the calendar.
+- Live corpus validation (calendar-aware): 286 symbols / 19,386 records — 277 VALID, 0 INVALID, 9 SUSPICIOUS (stale), 0 duplicates, 0 conflicts; 223 missing trading sessions (new listings joining mid-window) vs 11,947 expected non-trading days correctly classified.
+- Cross-provider disagreement is now *detected* before trust, but only providers actually configured in the chain are compared: with a single live API source the reconciliation layer is exercised via the CSV fallback and the test/validation harness — documented, not overclaimed.
+
+---
+
+## [v1.0.0-rc4] — 2026-08-13
+
+### Added — Sprint 13.3 (Live Data Quality & Provider Reliability)
+- **Canonical market-data contract** (`src/data/quality.py`) — the engine now validates every OHLCV payload that enters the platform against one documented contract (``symbol/date/open/high/low/close/volume``; optional fields never fail records).  States are machine-readable: ``VALID`` / ``INVALID`` / ``SUSPICIOUS`` and ``FRESH`` / ``STALE`` / ``UNKNOWN``, with stable reason codes (``non_positive_price``, ``nan_price``, ``infinite_price``, ``negative_volume``, ``high_below_open_close``, ``low_above_open_close``, ``high_below_low``, ``invalid_date``, ``future_date``, ``duplicate_date``, ``conflicting_duplicate``, ``unexpected_gap``, ``stale_data``, …).  Validation is **centralized** — providers, loaders and the API never scatter ad-hoc checks — and never exposes raw exception tracebacks.
+- **OHLC integrity** — vectorized checks for positive finite prices, non-negative volume, NaN/inf rejection and the high/low/open/close relationships; row-level ``validate_ohlcv_record`` covers the same contract for single-record callers.
+- **Duplicate & conflict detection** — identical duplicates on the same trading date are deduplicated safely (warning); disagreeing duplicates are flagged as ``CONFLICT`` (error) and never silently resolved.
+- **Continuity & freshness** — business-day gaps wider than ``DATA_MAX_GAP_DAYS`` (14) are reported without inventing candles; the latest record's age is classified ``FRESH``/``STALE`` against ``DATA_STALE_AFTER_DAYS`` (7); a stale price can never automatically generate a fresh BUY/SELL signal (``ENFORCE_SIGNAL_FRESHNESS`` default off for backward compatibility, enforced signal suppression when enabled).
+- **Provider fallback validation** (`src/data/providers.py`, `src/data/service.py`) — ``HybridProvider`` gained a ``data_validator`` hook: malformed provider payloads (broken OHLC, NaN, conflicts) raise ``InvalidDataError`` and the hybrid falls through to the next provider; the CSV fallback and last-known-value semantics are preserved; ``CSVProvider._discover_csv_files`` deduplicates by symbol stem across layout patterns so one symbol is never analysed twice.
+- **Live HTTP timeout test** (`tests/test_sprint13_3.py::TestLiveTimeout`) — a controlled local ``ThreadingHTTPServer`` deliberately delays past the configured ``API_TIMEOUT``; verified ``ProviderTimeout`` is raised, the hybrid falls back to CSV (timeout/failure metrics bump), the API stays responsive, and no handler/serve threads leak.
+- **Symbol-mapping integrity** — normalization (uppercase/strip), empty/whitespace/unsafe-symbol checks, case-insensitive CSV resolution, unknown/delisted symbols resolve to ``None`` (never another company's data), and stem-deduplication is tested.
+- **Market-status zero-vs-unknown** — ``/market/status`` and ``/market-status`` now distinguish a genuine zero (real market print) from an unknown/unavailable summary: the payload carries an additive ``data_quality`` block (``available`` / ``status`` / ``unknown_fields`` / ``as_of`` / ``age_seconds`` / ``freshness`` / ``source``); a provider failure is never rendered as ``NEPSE 0.00``.
+- **Signal safety** — invalid/conflicting data suppresses the signal to ``HOLD`` with ``signal_suppressed=True`` and ``signal_suppression_reason``; stale data is flagged and (when enforcement is on) suppressed; every analysis and the market-status payload expose ``data_quality`` additively, backward-compatible.
+- **Scanner safety** — files failing the canonical contract move to ``skipped`` (with machine-readable reasons) instead of ranked results; healthy symbols keep deterministic ranking; INVALID analyses are still cached so warm scans remain pure cache hits; INVALID symbols are excluded from the alert batch.
+- **Bounded quality metrics** — thread-safe ``QualityMetricsCollector`` (records_checked/valid/invalid/suspicious, duplicates, conflicts, stale_records, provider_failures/timeouts, fallback_count) surfaced through ``GET /metrics`` under ``data_quality``; scalar-only, no unbounded per-record history.
+- **Data-quality report CLI** — ``python -m src.data.quality --data-dir data/raw`` validates every CSV and prints a per-symbol table plus aggregates; exits non-zero when critical conditions (INVALID records or conflicts) are present, ``--allow-invalid`` for report-only.
+- **Config** — ``DATA_STALE_AFTER_DAYS=7``, ``DATA_MAX_GAP_DAYS=14``, ``ENFORCE_SIGNAL_FRESHNESS=false`` (env-overridable).
+- **Sprint 13.3 test suite** (`tests/test_sprint13_3.py`) — 88 tests covering OHLC integrity, dates, duplicates/conflicts, continuity, freshness, symbols, market summary, quotes, provider disagreement, provider validation/fallback, quality metrics, signal safety, scanner safety, cache freshness, live timeout, market-status API contract, analyze API contract and the data-quality CLI.
+
+### Notes
+- Validator entry points: ``assess_history(df, symbol=…)``, ``validate_history_frame``, ``assess_quote``, ``assess_market_summary``, ``detect_disagreement``, ``validate_corpus``.
+- Provider disagreement policy: the hybrid prefers the first validated provider in priority order; ``detect_disagreement`` flags material >1% differences — the engine never silently averages conflicting prices.
+- Real-corpus report (2026-08-13): 286 symbols / 19,451 records — 212 VALID, 65 INVALID (each carrying one zero-price row on 2026-07-24 from the yonepse refresh), 9 SUSPICIOUS (stale), 0 duplicates, 0 conflicts.  The 65 affected symbols are excluded from ranked results and their signals suppressed until the underlying rows are repaired.
+
+---
+
+## [v1.0.0-rc4] — 2026-08-12
+
+### Added — Sprint 13.2 (Multi-Worker Reliability & Failure-Path Hardening)
+- **Live 2-worker validation** (`tests/test_sprint13_2.py::TestLiveTwoWorker`) — spawns the exact Docker API entrypoint (`uvicorn src.api.main:app --workers=2`) against an isolated temp corpus/state root and verifies: all core endpoints serve 200, both workers self-report and aggregate with sum semantics (aggregate ≥ local, no double counting), killing one worker leaves the fleet serving and uvicorn respawns a fresh pid, and a dead-provider run degrades `/market/status` to a controlled empty summary while `/analyze` keeps serving via CSV fallback
+- **Provider timeout path** — `APIProvider` now uses the documented `API_TIMEOUT` config (was hard-coded 15 s, ignoring the Docker setting); timeouts raise a distinguishable `ProviderTimeout` (a `ProviderError` subclass) via a failure-kind tracker instead of degrading into a generic error; `BaseProvider.get_*` wrappers preserve the distinction end-to-end; the history loop's fail-fast threshold also surfaces `ProviderTimeout`
+- **Provider failure matrix tests** — timeout / connection error / HTTP error / malformed response / empty response / all-providers-fail, each with the expected controlled behaviour and metric accounting (`provider_failures` increments; hybrid falls back to CSV; service returns empty history/summary, never crashes)
+- **Worker metrics aggregation extension** (`src/utils/worker_metrics.py`) — per-worker `api_requests` totals (requests/errors) self-reported alongside cache/lock counters; `aggregate.requests`/`aggregate.request_errors` are the fleet sums (each request served by exactly one worker → true aggregate); backward-compatible additive keys
+- **Worker lifecycle observability** (`src/api/main.py`) — FastAPI lifespan logs `worker start pid=… hostname=…` / `worker stop pid=…` per worker process, making multi-worker deployments diagnosable from logs alone
+- **API error-detail sanitization** (`src/api/analyze.py`, `portfolio.py`, `scanner.py`, `watchlist.py`) — 500 details no longer embed raw exception text (paths, tokens, internal URLs); stable prefixes preserved (tests assert prefixes, so no contract break)
+- **Windows orphan-process fix** (`benchmarks/validate_workers.py`) — `_shutdown` now always runs `taskkill /T /F` on Windows after the graceful signal: multiprocessing-spawned uvicorn workers are not in the master's console group and previously survived its exit, holding state files open and poisoning later test runs
+- **Process-level gate enforcement tests** — `python -m benchmarks.ci_gate` proven to exit 0 on PASS and non-zero on FAIL / invalid data; missing/malformed/NaN/inf/empty measurements fail explicitly (never silent PASS); threshold-boundary semantics pinned (`actual == threshold` → PASS, one unit above → FAIL) for all three ratio gates and the p99 tripwire
+- **Failure cleanup tests** — locks released on exception, no `.tmp`/`.lock` litter after mutator/serialization failures, corrupt-store recovery backs up evidence, 8-thread concurrent `update_json` writes lose no updates
+- **Dashboard resilience tests** — metrics page survives malformed/stale/zero/missing metrics with a clear no-workers/stale state
+- **Sprint 13.2 test suite** (`tests/test_sprint13_2.py`) — 55 tests across worker-metrics safety, provider failure matrix, service timeout behaviour, failure cleanup, gate boundaries/invalid data/exit codes, API contract under failure, dashboard resilience, lifecycle logging, concurrent metrics stress, and live 2-worker validation
+
+---
+
+## [v1.0.0-rc4] — 2026-08-12
+
+### Added — Sprint 13.1 (Production API & Dashboard Integration Hardening)
+- **Bounded API request tracker** (`src/api/timing.py`) — thread-safe per-endpoint latency/error windows (deque-capped), wired into the FastAPI request-timing middleware; exposes p50/p95/p99, request and error counts per endpoint via ``GET /metrics`` under the new ``api_requests`` block
+- **Performance gates in /metrics** — ``performance_gates`` block reports the enforced CI thresholds (warm API ratio 0.75, warm portfolio ratio 0.75, analyze p99 2000 ms) plus the last recorded ``benchmark-ci.json`` verdict
+- **Fail-safe CI gate evaluation** (`benchmarks/ci_gate.py`) — pure ``evaluate_checks()`` turns missing/malformed/zero/non-finite measurements into explicit FAILs with reasons (no more silent ``ratio 0.0 <= max`` passes); artifacts now carry ``check_details``/``check_reasons``/``failures``; a failed run prints an actionable ``PERFORMANCE GATE FAILED`` block
+- **Dashboard hardening** (`src/ui/pages/metrics_page.py`) — new sections for API request latency, scanner cache counters and performance-gate PASS/FAIL status, all served by pure ``summarize_*`` helpers tolerant of missing/malformed/stale payloads
+- **CI-enforcement regression test** — proves the workflow actually invokes ``benchmarks.ci_gate`` so the gates can never silently become informational-only
+- **API Explorer fix** (`src/api/explorer.py`) — ``list_endpoints`` now unwraps FastAPI lazy ``_IncludedRouter`` placeholders (re-applying ``include_context.prefix``), restoring real endpoint discovery (41 endpoints incl. ``/market/status``) instead of an empty list
+- **Sprint 13.1 test suite** (`tests/test_sprint13_1.py`) — 36 tests: tracker bounds/thread-safety, /metrics block contract, gate pass/fail/missing/malformed/zero/stale/empty/small-sample, dashboard contract, multi-worker aggregation, production-path verification, legacy-path reachability, error hardening
+
+---
+
+## [v1.0.0-rc3] — 2026-08-06
+
+### Added — Sprint 11 (Performance, Scalability & Observability)
+- **Parallel market scanner** (`src/scanner/engine.py`) — ``scan_market`` now analyses every CSV concurrently with a bounded ``ThreadPoolExecutor`` (worker count from ``SCANNER_WORKERS``), with deterministic file-order output, per-file error isolation, and progress logging every ``SCANNER_LOG_PROGRESS_EVERY`` files
+- **Scanner cache** (`src/cache/scanner_cache.py`) — thread-safe LRU+Ttl cache with two tiers (parsed DataFrames + analysis outputs), keyed by file fingerprint (path, mtime, size) and invalidated on source change / expiry / indicator-configuration change; bounded by ``SCANNER_CACHE_MAX_ENTRIES``; exposes hit/miss metrics
+- **CSV parse cache** (`src/loaders/csv_loader.py`) — ``load_csv`` consults the scanner cache so unchanged files are never re-parsed (callers must treat returned frames as read-only)
+- **Indicator in-place chaining** (`src/indicators/*`, `src/engine/analyzer.py`) — every ``add_*`` gained an ``inplace=False`` keyword; ``analyze_dataframe`` now makes exactly **one** defensive copy and chains all indicator steps in-place (previously ~8 copies per stock); ATR replaced the temporary ``pd.concat(...).max(axis=1)`` frame with element-wise ``np.fmax`` (identical numerics)
+- **Historical data optimisation** (`src/data/service.py`) — ``get_history`` TTL now configurable via ``HISTORY_CACHE_TTL``; new ``get_history_batch(symbols, days)`` fetches only cache misses; the live-market scan fallback uses batch retrieval
+- **Metrics endpoint** (`src/api/metrics.py`) — ``GET /metrics`` exposes DataService request metrics, cache hit ratio, scanner cache stats, provider stats and best-effort memory usage
+- **Request timing middleware** (`src/api/main.py`) — structured latency log per HTTP request
+- **Timing helper** (`src/logging/timing.py`) — ``timed()`` context manager for structured ``name=... duration_ms=...`` records
+- **Alert state thread-safety** (`src/alerts/engine.py`) — ``process_alerts`` runs under an ``RLock`` so parallel scanner workers never corrupt ``data/alerts/history.json``
+- **Benchmark suite** (`scripts/benchmarks.py`) — automated benchmarks for scan (cold/warm), analysis, history load (miss/hit/batch), backtest speed, API latency, subprocess startup and peak scan memory; JSON results stored under ``benchmarks/results/`` with before/after comparison
+- **Performance regression tests** (`tests/test_performance.py`) — determinism, parallelism, cache hit/invalidation/LRU, indicator in-place equivalence, history batch/TTL, metrics endpoint, benchmark smoke tests
+
+### Changed
+- **Configurable performance settings** (`src/config.py`) — ``SCANNER_WORKERS``, ``SCANNER_CACHE_TTL``, ``SCANNER_CACHE_MAX_ENTRIES``, ``SCANNER_LOG_PROGRESS_EVERY``, ``HISTORY_CACHE_TTL``, ``BENCHMARK_RESULTS_DIR``/``BENCHMARK_SYMBOLS``/``BENCHMARK_ROWS``
+- ``src/cache/market_cache.py`` — scan cache TTL derives from ``SCANNER_CACHE_TTL`` (backward-compatible ``CACHE_SECONDS`` alias preserved)
+- ``src/data/service.py`` — ``scan_market`` cache TTL derives from ``SCANNER_CACHE_TTL``
+
+### Notes
+- Analysis cache hits return the first scan's ``new_alerts`` and do not re-run ``process_alerts`` (same semantics as the whole-scan ``market_cache``); clear the cache or touch the CSV to force a fresh alert pass
+
+---
+
 ## [v1.0.0-rc2] — 2026-08-05
 
 ### Added

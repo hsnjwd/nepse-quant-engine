@@ -281,9 +281,37 @@ BACKOFF_BASE = 1.0               # Initial backoff delay (seconds)
 CACHE_REFRESH_INTERVAL = 60      # Background refresh interval (seconds)
 HEALTH_CHECK_INTERVAL = 60       # Health monitor recheck interval
 
+# Scanner / History Performance (Sprint 11)
+SCANNER_WORKERS = 4              # Scanner thread-pool size
+SCANNER_CACHE_TTL = 300          # Scanner df/analysis cache TTL
+SCANNER_CACHE_MAX_ENTRIES = 600  # LRU bound per cache tier (raised from 200 in
+                                 # Sprint 12.3: 200 < the 280-file real corpus,
+                                 # so warm scans >200 symbols silently
+                                 # re-parsed evicted symbols)
+HISTORY_CACHE_TTL = 300          # get_history tiered-cache TTL
+
 # Performance
 ENABLE_PERFORMANCE_MONITORING = False  # Enable metrics collection
 ```
+
+## Batch history retrieval
+
+`get_history_batch` loads many symbols while fetching only the cache
+misses — used by the live-market scan fallback to avoid N redundant
+provider calls and disk reads:
+
+```python
+histories = svc.get_history_batch(["NABIL", "SCB", "ADBL"], days=365)
+hist = histories["NABIL"]   # StockHistory
+```
+
+## Metrics endpoint
+
+The FastAPI app exposes `GET /metrics` — a JSON snapshot of request
+metrics, cache hit ratio, per-operation/per-provider breakdowns,
+scanner-cache statistics, background-refresh status and best-effort
+memory usage. Every HTTP request is also timed by middleware and
+logged as a structured `timing name=api_request ...` record.
 
 Override at runtime:
 ```python
