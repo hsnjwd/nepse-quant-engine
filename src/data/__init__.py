@@ -48,6 +48,24 @@ from src.data.health import (
     HealthCheckConfig,
 )
 from src.data.metrics import MetricsCollector, MetricsSnapshot
+from src.data.quality import (
+    DataQualityReport,
+    QualityIssue,
+    QualityMetricsCollector,
+    quality_metrics,
+    assess_history,
+    validate_history_frame,
+    assess_market_summary,
+    assess_freshness,
+    detect_disagreement,
+    validate_corpus,
+    VALID,
+    INVALID,
+    SUSPICIOUS,
+    FRESH,
+    STALE,
+    UNKNOWN,
+)
 
 __all__ = [
     # Service
@@ -90,4 +108,21 @@ __all__ = [
     # Metrics
     "MetricsCollector",
     "MetricsSnapshot",
+    # Data quality (Sprint 13.3)
+    "DataQualityReport",
+    "QualityIssue",
+    "QualityMetricsCollector",
+    "quality_metrics",
+    "assess_history",
+    "validate_history_frame",
+    "assess_market_summary",
+    "assess_freshness",
+    "detect_disagreement",
+    "validate_corpus",
+    "VALID",
+    "INVALID",
+    "SUSPICIOUS",
+    "FRESH",
+    "STALE",
+    "UNKNOWN",
 ]

@@ -93,12 +93,20 @@ class StockHistory:
 
     The ``df`` attribute contains columns ``Date``, ``Open``, ``High``,
     ``Low``, ``Close``, ``Volume`` (and optionally ``Turnover``).
+
+    ``provenance`` (Sprint 13.5): compact trust-state metadata attached
+    to the history (sources, trust, reconciliation/calendar/quality
+    signals).  Defaults to an empty dict so every existing constructor
+    and disk-cache round-trip stays byte-compatible; populated by
+    ``DataService`` paths that opt into provenance (see
+    ``src/data/provenance.py``).
     """
 
     symbol: str = ""
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
     days: int = 0
     source: str = ""  # "api" | "csv" | "cache"
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from typing import Any, get_type_hints
 
 import pandas as pd
 import numpy as np
+
+from src.utils.json_store import save_json
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +225,20 @@ class MemoryCache:
         with self._lock:
             self._store.clear()
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every key beginning with *prefix*; return count removed.
+
+        Sprint 13.5 cache safety: targeted invalidation (e.g. only the
+        ``reconciled:*`` namespace) must not evict the rest of the
+        cache — a material-conflict outcome must be purged without
+        dropping plain history, quotes or summaries.
+        """
+        with self._lock:
+            keys = [k for k in self._store if k.startswith(prefix)]
+            for k in keys:
+                del self._store[k]
+            return len(keys)
+
     def has(self, key: str) -> bool:
         return self.get(key) is not None
 
@@ -236,7 +253,11 @@ class MemoryCache:
 # ═══════════════════════════════════════════════════════════════════
 
 
-DISK_CACHE_DIR = Path.home() / ".nepse" / "cache"
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
+DISK_CACHE_DIR = NEPSE_HOME / "cache"
 
 
 class DiskCache:
@@ -282,11 +303,15 @@ class DiskCache:
         path = self._path(key)
         try:
             serialized = _serialize_for_disk(value)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {"data": serialized, "timestamp": time.time(), "ttl": ttl},
-                    f,
-                )
+            # Atomic write (Sprint 11.1): temp file in the same directory
+            # + os.replace so a crash mid-write can never corrupt a cache
+            # entry that other processes/reads depend on.
+            save_json(
+                path,
+                {"data": serialized, "timestamp": time.time(), "ttl": ttl},
+                indent=None,
+                log_name="DiskCache",
+            )
         except (OSError, TypeError, ValueError) as exc:
             # A cache-write failure must never corrupt the caller's
             # response — log and skip caching instead.
@@ -306,6 +331,39 @@ class DiskCache:
                     f.unlink()
                 except OSError as exc:
                     logger.warning("DiskCache clear error: %s", exc)
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every key beginning with *prefix*; return count removed.
+
+        Disk keys are sanitised file names (non-alphanumerics become
+        ``_``), so the prefix is sanitised the same way and matched
+        against file stems.  Sprint 13.5 targeted invalidation.
+        """
+        safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in prefix)
+        count = 0
+        with self._lock:
+            for f in self._cache_dir.glob("*.json"):
+                stem = f.stem
+                if not stem.startswith(safe):
+                    continue
+                # Boundary guard (Sprint 13.5): when the sanitised prefix
+                # ends in an alphanumeric, the next character must be a
+                # separator or end-of-name — so clearing
+                # ``reconciled:NABIL:365`` (sanitised ``reconciled_NABIL_365``)
+                # never also deletes ``reconciled:NABIL:3650``
+                # (``reconciled_NABIL_3650``).  A trailing ``_`` separator
+                # needs no guard: everything after it legitimately belongs
+                # to the prefix namespace.
+                if safe and safe[-1].isalnum():
+                    rest = stem[len(safe):]
+                    if rest and rest[0].isalnum():
+                        continue
+                try:
+                    f.unlink()
+                    count += 1
+                except OSError as exc:
+                    logger.warning("DiskCache delete error for %s: %s", f.name, exc)
+        return count
 
     def has(self, key: str) -> bool:
         return self.get(key) is not None
@@ -356,6 +414,15 @@ class TieredCache:
     def clear(self) -> None:
         self._memory.clear()
         self._disk.clear()
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every key beginning with *prefix* in both tiers.
+
+        Returns the total number of entries removed (memory + disk).
+        Sprint 13.5 cache safety: targeted invalidation of e.g. the
+        ``reconciled:*`` namespace without clearing the whole cache.
+        """
+        return self._memory.delete_prefix(prefix) + self._disk.delete_prefix(prefix)
 
     def has(self, key: str) -> bool:
         return self._memory.has(key) or self._disk.has(key)
