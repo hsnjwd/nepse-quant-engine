@@ -99,6 +99,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     nav_button("Dashboard", "dashboard", "🏠")
+    nav_button("Alerts", "alerts", "🔔")
 
     st.markdown(
         f"<p style='color: {theme.text_muted}; font-size: 0.7rem; "
@@ -167,6 +168,7 @@ with st.sidebar:
     nav_button("Settings", "settings", "⚙️")
     nav_button("Cache & Performance", "cache", "📦", indent=True)
     nav_button("System Status", "system_status", "🩺", indent=True)
+    nav_button("Metrics", "metrics", "📊", indent=True)
 
     st.markdown("---")
 
@@ -335,6 +337,7 @@ st.markdown(
              '📄' if page == 'reports' else
              '📦' if page == 'cache' else
              '🩺' if page == 'system_status' else
+             '📊' if page == 'metrics' else
              '⚙️' if page == 'settings' else '📈'}
         </h2>
     </div>
@@ -415,6 +418,8 @@ try:
         from src.ui.pages.cache_page import render as render_page
     elif page == "system_status":
         from src.ui.pages.system_status_page import render as render_page
+    elif page == "metrics":
+        from src.ui.pages.metrics_page import render as render_page
     elif page == "settings":
         from src.ui.pages.settings_page import render as render_page
     else:

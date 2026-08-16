@@ -13,6 +13,12 @@ from launcher.bot_launcher import (
     stop_bot,
 )
 
+from launcher.dashboard import (
+    start_dashboard,
+    stop_dashboard,
+    dashboard_running,
+)
+
 
 class ProcessManager:
     """
@@ -24,6 +30,7 @@ class ProcessManager:
 
         self.api_process = None
         self.bot_process = None
+        self.dashboard_process = None
 
     # ---------------------------------
     # API
@@ -70,6 +77,22 @@ class ProcessManager:
         return True
 
     # ---------------------------------
+    # DASHBOARD
+    # ---------------------------------
+
+    def start_dashboard(self):
+
+        if dashboard_running():
+            logger.info("✅ Dashboard already running.")
+            return True
+
+        self.dashboard_process = start_dashboard()
+
+        logger.info("✅ Streamlit Dashboard Started")
+
+        return True
+
+    # ---------------------------------
     # START EVERYTHING
     # ---------------------------------
 
@@ -82,6 +105,8 @@ class ProcessManager:
             return False
 
         self.start_bot()
+
+        self.start_dashboard()
 
         logger.info("\n✅ All services started successfully.\n")
 
@@ -98,6 +123,8 @@ class ProcessManager:
         stop_bot(self.bot_process)
 
         stop_api(self.api_process)
+
+        stop_dashboard(self.dashboard_process)
 
         logger.info("✅ All services stopped.")
 
@@ -124,4 +151,5 @@ class ProcessManager:
         return {
             "api": api_running(),
             "bot": self.bot_process is not None,
+            "dashboard": dashboard_running(),
         }

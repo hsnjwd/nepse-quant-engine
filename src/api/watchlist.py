@@ -38,7 +38,7 @@ def get_watchlist() -> Any:
         logger.error("Error loading watchlist: %s", err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to load watchlist: {err}",
+            detail="Failed to load watchlist",
         ) from err
 
 
@@ -75,7 +75,7 @@ def add(symbol: str) -> dict[str, str]:
         logger.error("Error adding symbol %s to watchlist: %s", clean_symbol, err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add symbol {clean_symbol} to watchlist: {err}",
+            detail=f"Failed to add symbol {clean_symbol} to watchlist",
         ) from err
 
 
@@ -112,7 +112,7 @@ def remove(symbol: str) -> dict[str, str]:
         logger.error("Error removing symbol %s from watchlist: %s", clean_symbol, err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove symbol {clean_symbol} from watchlist: {err}",
+            detail=f"Failed to remove symbol {clean_symbol} from watchlist",
         ) from err
 
 
@@ -133,5 +133,5 @@ def scan() -> Any:
         logger.error("Error scanning watchlist: %s", err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to scan watchlist: {err}",
+            detail="Failed to scan watchlist",
         ) from err

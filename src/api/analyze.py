@@ -51,9 +51,14 @@ def analyze(symbol: str) -> dict[str, Any]:
         result["symbol"] = clean_symbol.upper()
         return result
     except Exception as err:
+        # Sprint 13.2 (Phase 12): the client-facing 500 detail is
+        # sanitised — the raw exception (which may embed filesystem
+        # paths or internal state) is logged server-side only, never
+        # returned to the client.  The status code (500) carries the
+        # semantics; the response stays predictable and leak-free.
         logger.error("Error analyzing stock data for %s: %s", clean_symbol.upper(), err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to analyze stock data for {clean_symbol.upper()}: {err}",
+            detail=f"Failed to analyze stock data for {clean_symbol.upper()}",
         ) from err
     

@@ -27,8 +27,10 @@ def portfolio() -> dict[str, Any]:
         result: dict[str, Any] = analyze_portfolio()
         return result
     except Exception as err:
+        # Sprint 13.2 (Phase 12): sanitised detail — raw exception logged
+        # server-side only, never leaked to the client.
         logger.error("Error analyzing portfolio: %s", err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to analyze portfolio: {err}",
+            detail="Failed to analyze portfolio",
         ) from err

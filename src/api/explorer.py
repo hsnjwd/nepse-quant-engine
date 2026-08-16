@@ -120,15 +120,42 @@ def list_endpoints(include: set[str] | None = None) -> list[ApiEndpoint]:
         logger.warning("Could not import API app for introspection: %s", exc)
         return []
 
-    endpoints: list[ApiEndpoint] = []
-    routes = getattr(app, "routes", [])
+    def _concrete_routes():
+        """Yield ``(route, prefix)`` behind ``app.routes``.
 
-    for route in routes:
+        Recent FastAPI versions register ``include_router`` calls as
+        lazy ``_IncludedRouter`` placeholders that expose no ``methods``
+        of their own (the real routes live on
+        ``original_router.routes``, and the ``include_router(prefix=...)``
+        prefix lives on ``include_context.prefix``).  Without unwrapping
+        both, introspection sees an empty endpoint list and the API
+        Explorer renders nothing.  Plain routes (e.g. a bare
+        ``@app.get``) are yielded as-is with an empty prefix.
+        """
+        for route in getattr(app, "routes", []):
+            original = getattr(route, "original_router", None)
+            if original is not None and getattr(original, "routes", None):
+                prefix = ""
+                ctx = getattr(route, "include_context", None)
+                if ctx is not None:
+                    prefix = str(getattr(ctx, "prefix", "") or "")
+                for sub in original.routes:
+                    yield sub, prefix
+            else:
+                yield route, ""
+
+    endpoints: list[ApiEndpoint] = []
+
+    for route, prefix in _concrete_routes():
         methods = sorted(getattr(route, "methods", set()) or set())
         if not methods:
             continue
 
         path = getattr(route, "path", "")
+        if prefix:
+            # Re-apply the include_router prefix that the lazy wrapper
+            # hides (e.g. ``/market`` + ``/status`` -> ``/market/status``).
+            path = prefix.rstrip("/") + "/" + path.lstrip("/")
         if path in {"/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}:
             continue
 

@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_DIR = Path.home() / ".nepse"
+# User-state root. Defaults to ``~/.nepse``; overridable via NEPSE_HOME
+# so tests can isolate from real user data.
+NEPSE_HOME = Path(os.environ.get("NEPSE_HOME", str(Path.home() / ".nepse")))
+
+SETTINGS_DIR = NEPSE_HOME
 SETTINGS_FILE = SETTINGS_DIR / "user_settings.json"
 
 # Default settings
