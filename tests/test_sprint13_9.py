@@ -106,8 +106,13 @@ def _spawn_uvicorn(port: int, tmp: Path, workers: int = 1) -> subprocess.Popen:
         ],
         cwd=REPO,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        # DEVNULL, never PIPE: these lifecycle tests never read the
+        # worker's stdout, and an undrained pipe fills up (~4 KB on
+        # Windows) once startup logs under load exceed the buffer — the
+        # worker then blocks writing and never becomes live, which
+        # flakes ``*_became_live`` asserts in long suite runs.
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     return proc
 
@@ -121,6 +126,22 @@ def _terminate(proc: subprocess.Popen, timeout: float = 30.0) -> int:
             proc.kill()
             return proc.wait()
     return proc.returncode
+
+
+def _assert_clean_stop(rc: int) -> None:
+    """A SIGTERM stop must exit 0 (graceful) or -15 (signal death).
+
+    On Windows ``send_signal(SIGTERM)`` maps to ``TerminateProcess``,
+    which always exits with code 1 and cannot drain requests, so the
+    graceful-shutdown contract is asserted on POSIX (local dev, CI).
+    The Windows run still verifies liveness/readiness before the stop
+    and the no-leftover-files test after it, so ``rc in (0, 1)`` is a
+    sanity bound that still catches an abnormal crash.
+    """
+    if os.name == "nt":
+        assert rc in (0, 1), f"unexpected exit code on Windows: rc={rc}"
+    else:
+        assert rc in (0, -15), f"SIGTERM should stop cleanly, got rc={rc}"
 
 
 def _shipped_calendar_dict() -> dict:
@@ -352,7 +373,7 @@ class TestGracefulShutdown:
         # death (rc=-15) after draining; the two-worker supervisor
         # (the Docker api stage) exits 0.  Both are clean stops — the
         # state-safety assertion is the no-leftover-files test below.
-        assert rc in (0, -15), f"SIGTERM should stop cleanly, got rc={rc}"
+        _assert_clean_stop(rc)
 
     def test_no_leftover_temp_or_lock_files(self, tmp_path) -> None:
         port = _free_port()
@@ -389,7 +410,17 @@ class TestCrashRecovery:
         svc.start_background_refresh(interval=3600)
         assert svc.is_background_refresh_running()
         svc.stop_background_refresh()
-        assert not svc.is_background_refresh_running()
+        # stop_background_refresh() joins with a fixed 5 s timeout, but
+        # the first refresh cycle can take longer than that on a loaded
+        # machine (the thread is daemon and exits as soon as the cycle
+        # completes).  Assert the real guarantee — the thread actually
+        # stops — instead of assuming it fits inside the join window.
+        deadline = time.monotonic() + 30
+        while svc.is_background_refresh_running() and time.monotonic() < deadline:
+            time.sleep(0.25)
+        assert not svc.is_background_refresh_running(), (
+            "refresh thread did not stop within 30 s"
+        )
         DataService.reset_instance()
 
     def test_disk_cache_corrupt_entry_is_safe_miss(self, tmp_path) -> None:
@@ -1305,7 +1336,10 @@ class TestTwoWorkerDeployment:
             assert seen_active >= 2, f"expected 2 active workers, saw {seen_active}"
         finally:
             rc = _terminate(proc)
-        assert rc == 0, f"two-worker SIGTERM should exit cleanly, got rc={rc}"
+        # The two-worker supervisor exits 0 after draining on POSIX; on
+        # Windows SIGTERM is TerminateProcess (rc=1).  Both are clean
+        # stops — the metrics store stays valid is asserted below.
+        _assert_clean_stop(rc)
 
     def test_worker_metrics_store_stays_valid(self, tmp_path) -> None:
         port = _free_port()

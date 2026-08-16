@@ -8,9 +8,11 @@ directory for everything a release must NOT ship:
 * committed secrets (token/API-key/private-key patterns with values)
 * local developer paths (POSIX home dirs and Windows user-profile roots)
 * temporary / generated junk (``__pycache__``, ``*.pyc``, ``*.tmp``,
-  ``*.corrupt.bak``, pytest temp roots, benchmark result outputs)
+  ``*.corrupt.bak``, pytest temp roots — both ``.pytest_tmp/`` and the
+  older ``.ptmp_*`` variant, benchmark result outputs, ``*.log``)
 * local-only workspace / runtime state that must never ship in a
   reproducible source bundle:
+  - ``.env`` — live secrets (only the placeholder ``.env.example`` ships)
   - ``.freebuff/`` — Freebuff workspace metadata (never tracked)
   - ``data/raw/syn*.csv`` — the synthetic benchmark corpus, generated
     at runtime by ``benchmarks.common.write_csvs`` into its own temp
@@ -59,6 +61,7 @@ EXCLUDED_FILE_SUFFIXES = (
     ".tmp",
     ".lock",
     ".bak",
+    ".log",
     ".db-wal",
     ".db-shm",
 )
@@ -67,6 +70,10 @@ EXCLUDED_FILE_NAMES = {
     "desktop.db",
     "desktop.db-shm",
     "desktop.db-wal",
+    # A live env file (TELEGRAM_TOKEN etc.) must never ship in a source
+    # artifact; only the placeholder template ``.env.example`` ships.
+    ".env",
+    "portfolio.json",
     # Gitignored runtime/build state under data/state/: generated while
     # the engine runs or by the release build, regenerated on demand,
     # and never part of a source artifact.
@@ -79,6 +86,9 @@ EXCLUDED_FILE_NAMES = {
 # ``synNNN.csv`` files; any such file in the tree is build-machine
 # residue, never required source.
 _SYNTHETIC_CORPUS_RE = re.compile(r"^syn\d+\.csv$", re.IGNORECASE)
+# Root-level benchmark gate outputs (``benchmark-ci.json`` etc.) are
+# gitignored build-machine residue, never required source.
+_ROOT_BENCHMARK_JSON_RE = re.compile(r"^benchmark-.*\.json$")
 
 REQUIRED_SOURCE_FILES = (
     "VERSION",
@@ -124,13 +134,17 @@ def _is_excluded_dir(rel: Path) -> bool:
 
     ``benchmarks/results`` is matched as an adjacent component pair
     (it can sit anywhere under the tree); every other entry is a single
-    component.
+    component.  ``.ptmp_*`` (pytest temp roots from older basetemp
+    configurations; the current convention is ``.pytest_tmp/``) is
+    matched by prefix so any machine's stale residue is skipped.
     """
     parts = rel.parts
     for i, part in enumerate(parts):
         if part in EXCLUDED_DIR_NAMES:
             return True
         if part == "benchmarks" and i + 1 < len(parts) and parts[i + 1] == "results":
+            return True
+        if part.startswith(".ptmp_"):
             return True
     return False
 
@@ -142,6 +156,9 @@ def _is_excluded_file(rel: Path) -> bool:
         return True
     # Synthetic benchmark corpus files (generated; see module docstring).
     if rel.parent.parts[:2] == ("data", "raw") and _SYNTHETIC_CORPUS_RE.match(rel.name):
+        return True
+    # Root-level benchmark gate outputs (gitignored build residue).
+    if rel.parent == Path(".") and _ROOT_BENCHMARK_JSON_RE.match(rel.name):
         return True
     return False
 
