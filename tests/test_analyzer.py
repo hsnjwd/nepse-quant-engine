@@ -6,10 +6,13 @@ from src.engine import analyzer
 
 @pytest.fixture
 def patched_dependencies(monkeypatch):
-    monkeypatch.setattr(analyzer, "add_moving_averages", lambda df: df)
-    monkeypatch.setattr(analyzer, "add_momentum_indicators", lambda df: df)
-    monkeypatch.setattr(analyzer, "add_volume_indicators", lambda df: df)
-    monkeypatch.setattr(analyzer, "add_volatility_indicators", lambda df: df)
+    # Sprint 11: indicator entry points gained an optional, backward-
+    # compatible ``inplace`` keyword (see src/indicators/*).  The mocks
+    # mirror the new signature so analyze_dataframe's in-place chain works.
+    monkeypatch.setattr(analyzer, "add_moving_averages", lambda df, inplace=False: df)
+    monkeypatch.setattr(analyzer, "add_momentum_indicators", lambda df, inplace=False: df)
+    monkeypatch.setattr(analyzer, "add_volume_indicators", lambda df, inplace=False: df)
+    monkeypatch.setattr(analyzer, "add_volatility_indicators", lambda df, inplace=False: df)
     monkeypatch.setattr(analyzer, "get_support", lambda df: 80.0)
     monkeypatch.setattr(analyzer, "get_resistance", lambda df: 120.0)
     monkeypatch.setattr(analyzer, "get_trend", lambda latest: "UPTREND")
@@ -36,10 +39,10 @@ def test_analyze_dataframe_returns_expected_structure(patched_dependencies, samp
 
 
 def test_analyze_dataframe_raises_for_empty_frame(monkeypatch, sample_frame):
-    monkeypatch.setattr(analyzer, "add_moving_averages", lambda df: df.iloc[0:0])
-    monkeypatch.setattr(analyzer, "add_momentum_indicators", lambda df: df.iloc[0:0])
-    monkeypatch.setattr(analyzer, "add_volume_indicators", lambda df: df.iloc[0:0])
-    monkeypatch.setattr(analyzer, "add_volatility_indicators", lambda df: df.iloc[0:0])
+    monkeypatch.setattr(analyzer, "add_moving_averages", lambda df, inplace=False: df.iloc[0:0])
+    monkeypatch.setattr(analyzer, "add_momentum_indicators", lambda df, inplace=False: df.iloc[0:0])
+    monkeypatch.setattr(analyzer, "add_volume_indicators", lambda df, inplace=False: df.iloc[0:0])
+    monkeypatch.setattr(analyzer, "add_volatility_indicators", lambda df, inplace=False: df.iloc[0:0])
     with pytest.raises(ValueError, match="No rows remaining"):
         analyzer.analyze_dataframe(sample_frame)
 
@@ -49,7 +52,9 @@ def test_analyze_stock_uses_file_name_and_process_alerts(monkeypatch, tmp_path):
     csv_path.write_text("date,close\n2024-01-01,100\n", encoding="utf-8")
 
     monkeypatch.setattr(analyzer, "load_csv", lambda file: pd.DataFrame([{"Close": 100.0, "SMA_20": 95.0, "SMA_50": 90.0, "RSI": 55.0, "MACD": 1.5, "MACD_SIGNAL": 0.8, "VOLUME_SIGNAL": "NORMAL", "RELATIVE_VOLUME": 1.2, "VOLUME_SCORE": 1, "ATR": 2.5}]))
-    monkeypatch.setattr(analyzer, "analyze_dataframe", lambda df: {"price": 100.0, "signal": "BUY"})
+    # analyze_stock now passes the symbol namespace to the indicator
+    # cache (Sprint 11.4); the fake must tolerate the extra kwarg.
+    monkeypatch.setattr(analyzer, "analyze_dataframe", lambda df, **kwargs: {"price": 100.0, "signal": "BUY"})
     monkeypatch.setattr(analyzer, "process_alerts", lambda symbol, result: [])
 
     result = analyzer.analyze_stock(str(csv_path))

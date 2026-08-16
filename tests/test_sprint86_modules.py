@@ -547,7 +547,15 @@ class TestApiExplorer:
 
         endpoints = list_endpoints()
         assert isinstance(endpoints, list)
-        assert all("path" in e and "method" in e for e in endpoints)
+        # ApiEndpoint is a dataclass — check attributes, not membership
+        # ("path" in e on a dataclass raises TypeError).  The prior
+        # membership check only ever passed vacuously because the list
+        # was empty (FastAPI lazy _IncludedRouter placeholders exposed
+        # no methods); now that explorer unwraps them the list is real
+        # and the assertion must check fields.
+        assert endpoints, "list_endpoints must discover at least one endpoint"
+        assert all(e.path and e.method for e in endpoints)
+        assert any(e.path == "/market/status" for e in endpoints)
 
     def test_send_request_error_handling(self) -> None:
         from src.api.explorer import send_request

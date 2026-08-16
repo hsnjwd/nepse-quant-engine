@@ -294,7 +294,7 @@ class TestScannerFilters:
 
     def test_text_filter(self) -> None:
         results = [{"symbol": "NABIL"}, {"symbol": "SCB"}, {"symbol": "NICA"}]
-        text = "NA"
+        text = "N"
         filtered = [r for r in results if text.upper() in r["symbol"].upper()]
         assert len(filtered) == 2  # NABIL, NICA
 

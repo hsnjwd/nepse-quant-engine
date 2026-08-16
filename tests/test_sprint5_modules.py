@@ -660,7 +660,7 @@ class TestAlertCenter:
         from src.alerts.center import AlertCenter
         center = AlertCenter()
         center.add_rule("NABIL", "volume", ">", 2.0)
-        events = center.check_volume_alerts({"NABIL": {"current": 2e6, "average": 1e6, "ratio": 2.0}})
+        events = center.check_volume_alerts({"NABIL": {"current": 2.5e6, "average": 1e6, "ratio": 2.5}})
         assert len(events) > 0
         center.clear_history()
 
@@ -758,31 +758,25 @@ class TestAlertCenter:
 
     def test_evaluate_operators(self) -> None:
         from src.alerts.center import AlertCenter
-        center = AlertCenter()
-        center.add_rule("NABIL", "price", ">", 100.0)
-        e1 = center.check_price_alerts({"NABIL": 101.0})
-        assert len(e1) > 0
-        center.clear_history()
 
-        center.add_rule("NABIL", "price", "<", 100.0)
-        e2 = center.check_price_alerts({"NABIL": 99.0})
-        assert len(e2) > 0
-        center.clear_history()
+        def _check(operator: str, price: float) -> int:
+            # Fresh center per operator so rules do not accumulate
+            # (clear_history() only clears events, not rules, and
+            # add_rule() persists rules to disk, so the rule must be
+            # removed to keep the file clean between checks).
+            center = AlertCenter()
+            rule = center.add_rule("NABIL", "price", operator, 100.0)
+            events = center.check_price_alerts({"NABIL": price})
+            center.remove_rule(rule.id)
+            center.clear_history()
+            return len(events)
 
-        center.add_rule("NABIL", "price", ">=", 100.0)
-        e3 = center.check_price_alerts({"NABIL": 100.0})
-        assert len(e3) > 0
-        center.clear_history()
-
-        center.add_rule("NABIL", "price", "<=", 100.0)
-        e4 = center.check_price_alerts({"NABIL": 100.0})
-        assert len(e4) > 0
-        center.clear_history()
-
-        center.add_rule("NABIL", "price", "==", 100.0)
-        e5 = center.check_price_alerts({"NABIL": 100.001})
-        assert len(e5) == 0  # not exactly 100
-        center.clear_history()
+        assert _check(">", 101.0) > 0
+        assert _check("<", 99.0) > 0
+        assert _check(">=", 100.0) > 0
+        assert _check("<=", 100.0) > 0
+        assert _check("==", 100.0) > 0
+        assert _check("==", 100.001) == 0  # not exactly 100
 
     def test_priority_levels(self) -> None:
         from src.alerts.center import (

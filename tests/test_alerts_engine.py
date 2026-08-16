@@ -24,8 +24,13 @@ def result_payload():
 
 
 def test_process_alerts_returns_initial_alerts(monkeypatch, result_payload):
-    monkeypatch.setattr(engine, "get_last_state", lambda symbol: None)
-    monkeypatch.setattr(engine, "update_state", lambda symbol, result: None)
+    # Sprint 11.2: process_alerts preloads the history once and threads it
+    # through get_last_state/update_state as an optional keyword, so the
+    # mocks must accept the history argument.
+    monkeypatch.setattr(engine, "get_last_state", lambda symbol, history=None: None)
+    monkeypatch.setattr(
+        engine, "update_state", lambda symbol, result, history=None, save=True: None
+    )
 
     alerts = engine.process_alerts("NABIL", result_payload)
 
@@ -42,8 +47,10 @@ def test_process_alerts_generates_change_alerts(monkeypatch, result_payload):
         "volume_signal": "NORMAL",
         "milestones": {"target1": False, "target2": False, "target3": False},
     }
-    monkeypatch.setattr(engine, "get_last_state", lambda symbol: previous)
-    monkeypatch.setattr(engine, "update_state", lambda symbol, result: None)
+    monkeypatch.setattr(engine, "get_last_state", lambda symbol, history=None: previous)
+    monkeypatch.setattr(
+        engine, "update_state", lambda symbol, result, history=None, save=True: None
+    )
 
     alerts = engine.process_alerts("NABIL", result_payload)
 

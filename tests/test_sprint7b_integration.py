@@ -408,8 +408,9 @@ class TestDashboardIntegration:
         )
         pnl = live_value - total_invested
         pnl_pct = (pnl / total_invested) * 100
-        assert pnl == 1000.0  # (550-500)*100 + (380-400)*50
-        assert round(pnl_pct, 2) == pytest.approx(1.43, rel=0.02)
+        # (550-500)*100 + (380-400)*50 = 5000 - 1000 = 4000 on 70000 invested
+        assert pnl == 4000.0
+        assert round(pnl_pct, 2) == pytest.approx(5.71, rel=0.02)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -720,8 +721,9 @@ class TestPaperTradingIntegration:
         engine.buy_market("NABIL", 100)
         engine.process_orders({"NABIL": 500.0})
         summary = engine.get_summary()
-        assert summary.balance == 50000.0  # 100000 - 50000
-        assert summary.invested == 50000.0
+        # 0.1% commission is charged on the fill: 50000 * 0.001 = 50
+        assert summary.balance == pytest.approx(100000.0 - 50000.0 - 50.0)
+        assert summary.invested == pytest.approx(50000.0)
         assert len(summary.open_positions) == 1
 
 
@@ -1233,6 +1235,8 @@ class TestSystemStatusIntegration:
 
         DataService.reset_instance()
         svc = DataService(provider=mock_provider)
+        # Performance monitoring is opt-in via config; enable it for this test.
+        svc._performance_monitoring_enabled = True
         svc.get_market_summary()
         svc.get_live_market()
 

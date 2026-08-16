@@ -77,6 +77,61 @@ def sample_quote() -> StockQuote:
 
 
 @pytest.fixture
+def scan_isolation(tmp_path: Path, monkeypatch):
+    """Isolate scanner-touching tests from real ``data/raw`` and real state.
+
+    Sprint 11.4: ``DataService.scan_market`` delegates to the real CSV
+    scanner, which reads ``DATA_DIRECTORY`` and writes ``HISTORY_FILE``
+    on every run.  Without this fixture the scan tests would depend on
+    the developer's real ``data/raw/`` corpus (hundreds of files) and
+    write synthetic symbols into the production alert-history file.
+
+    The fixture:
+    - writes a small deterministic OHLCV corpus into a temp dir,
+    - points ``src.scanner.engine.DATA_DIRECTORY`` at it,
+    - redirects ``src.alerts.history.HISTORY_FILE`` to a temp file,
+    - clears the in-memory scanner cache so no test inherits another
+      test's cached analyses.
+    """
+    import src.scanner.engine as scanner_engine
+    from src.alerts import history as alerts_history
+    from src.cache.scanner_cache import scanner_cache
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # 3 symbols x 60 rows of *valid* trading days — enough history for
+    # RSI/MACD/Bollinger windows so the analysis pipeline produces real
+    # results, not skips.  (Naive ``2025-01-{day:02d}`` day arithmetic
+    # would emit invalid dates past Jan 31 — Sprint 11.4 review catch.)
+    dates = pd.bdate_range(start="2025-01-01", periods=60)
+    for sym_idx, symbol in enumerate(("NABIL", "SCB", "ADBL"), start=1):
+        rows = []
+        price = 100.0 + sym_idx * 10
+        for day, date in enumerate(dates):
+            close = price + day + (day % 5)
+            rows.append(
+                f"{date.strftime('%Y-%m-%d')},{close - 1:.2f},{close + 2:.2f},"
+                f"{close - 3:.2f},{close:.2f},{1000000 + day * 100}"
+            )
+        (data_dir / f"{symbol}.csv").write_text(
+            "Date,Open,High,Low,Close,Volume\n" + "\n".join(rows) + "\n",
+            encoding="utf-8",
+        )
+
+    old_dir = scanner_engine.DATA_DIRECTORY
+    old_history = alerts_history.HISTORY_FILE
+    scanner_engine.DATA_DIRECTORY = str(data_dir)
+    alerts_history.HISTORY_FILE = tmp_path / "alerts" / "history.json"
+    scanner_cache.clear()
+    try:
+        yield data_dir
+    finally:
+        scanner_engine.DATA_DIRECTORY = old_dir
+        alerts_history.HISTORY_FILE = old_history
+        scanner_cache.clear()
+
+
+@pytest.fixture
 def mock_provider() -> MagicMock:
     provider = MagicMock(spec=BaseProvider)
     provider.name = "mock"
@@ -655,6 +710,104 @@ class TestAPIProvider:
         p = APIProvider(api_urls={"nepse_scraper": "http://invalid.local"})
         assert p.get_quote("NABIL") is None
 
+    # ── yonepse static-data fallback (Sprint 13.1) ────────────────
+    # The dict-format scraper API is dead.  The live summary is now
+    # assembled from yonepse's three files: market/status.json
+    # (is_open), market/summary.json (a *list* of {detail, value} rows
+    # — the old dict-only parser rejected this and fell back to
+    # MarketSummary.empty(), which is why the dashboard showed
+    # Unknown / 0.00), and indices.json (the real NEPSE Index).
+
+    def test_market_summary_parses_yonepse_list_and_index(self, monkeypatch) -> None:
+        payloads = {
+            "market/status.json": {"is_open": True, "last_checked": "2026-08-12T09:30:00"},
+            "market/summary.json": [
+                {"detail": "Total Turnover Rs:", "value": 3532105518.27},
+                {"detail": "Total Traded Shares", "value": 8701944.0},
+                {"detail": "Total Transactions", "value": 43990.0},
+                {"detail": "Total Scrips Traded", "value": 348.0},
+            ],
+            "indices.json": [
+                {"index": "Float Index", "close": 181.36, "change": 0.2, "perChange": 0.11},
+                {
+                    "index": "NEPSE Index",
+                    "close": 2641.86,
+                    "change": 0.55,
+                    "perChange": 0.02,
+                    "currentValue": 2642.4,
+                },
+            ],
+        }
+        p = APIProvider(api_urls={"github_datasets": "http://x", "nepse_client": "http://x"})
+        monkeypatch.setattr(p, "_try_urls", lambda keys, path: payloads.get(path))
+        s = p.get_market_summary()
+        assert s.index == 2642.4
+        assert s.change == 0.55
+        assert s.change_pct == 0.02
+        assert s.turnover == 3532105518.27
+        assert s.volume == 8701944
+        assert s.status == "Open"
+
+    def test_market_summary_yonepse_status_closed(self, monkeypatch) -> None:
+        p = APIProvider(api_urls={"github_datasets": "http://x", "nepse_client": "http://x"})
+        monkeypatch.setattr(
+            p,
+            "_try_urls",
+            lambda keys, path: ({"is_open": False} if path == "market/status.json" else None),
+        )
+        s = p.get_market_summary()
+        assert s.status == "Closed"
+        assert s.index == 0.0  # no index data — degraded but not a crash
+
+    def test_market_summary_falls_back_to_market_indices(self, monkeypatch) -> None:
+        """indices.json missing but market/indices.json present → still parsed."""
+        p = APIProvider(api_urls={"github_datasets": "http://x", "nepse_client": "http://x"})
+        monkeypatch.setattr(
+            p,
+            "_try_urls",
+            lambda keys, path: (
+                [{"index": "NEPSE Index", "currentValue": 2700.0, "change": -3.0, "perChange": -0.11}]
+                if path == "market/indices.json"
+                else None
+            ),
+        )
+        s = p.get_market_summary()
+        assert s.index == 2700.0
+        assert s.change == -3.0
+
+    def test_market_summary_all_probes_fail_raises(self, monkeypatch) -> None:
+        p = APIProvider(api_urls={
+            "nepse_scraper": "http://x",
+            "nepse_data_api": "http://x",
+            "github_datasets": "http://x",
+            "nepse_client": "http://x",
+        })
+        monkeypatch.setattr(p, "_try_urls", lambda keys, path: None)
+        with pytest.raises(ProviderError):
+            p.get_market_summary()
+
+    def test_market_summary_dict_format_still_works(self, monkeypatch) -> None:
+        """Regression guard: the original dict payload path is untouched."""
+        payload = {
+            "index": 2100.5,
+            "change": 12.3,
+            "changePct": 0.59,
+            "totalTradedShares": 15000000,
+            "totalTurnover": 1.2e9,
+            "status": "Open",
+        }
+        p = APIProvider(api_urls={"nepse_scraper": "http://x"})
+        monkeypatch.setattr(
+            p, "_try_urls", lambda keys, path: payload if path == "market/status" else None
+        )
+        s = p.get_market_summary()
+        assert s.index == 2100.5
+        assert s.change == 12.3
+        assert s.change_pct == 0.59
+        assert s.volume == 15000000
+        assert s.turnover == 1.2e9
+        assert s.status == "Open"
+
 
 class TestHybridProvider:
     def test_first_provider_succeeds(self) -> None:
@@ -991,11 +1144,17 @@ class TestDataService:
         svc = DataService(provider=FailingProvider())
         assert svc.get_top_turnover() == []
 
-    def test_scan_market(self, mock_provider: MagicMock) -> None:
+    def test_scan_market(self, mock_provider: MagicMock, scan_isolation) -> None:
         DataService.reset_instance()
         svc = DataService(provider=mock_provider, cache=TieredCache(memory_ttl=0))
         result = svc.scan_market()
         assert isinstance(result, MarketScanResult)
+        # Runs against the isolated fixture corpus, never the developer's
+        # real data/raw (Sprint 11.4 isolation).  With 3 valid 60-row
+        # fixture CSVs, all three symbols must analyse successfully — a
+        # fixture regression (e.g. dropped dates) would show up as skips.
+        assert len(result.results) >= 3
+        assert result.total_scanned >= 3
 
     def test_configure_api_urls(self) -> None:
         DataService.configure({"nepse_scraper": "http://custom.local/api"})
@@ -1259,7 +1418,7 @@ class TestDataServiceEdgeCases:
         assert mock_provider.get_market_summary.call_count == 2
         assert mock_provider.get_live_quotes.call_count == 2
 
-    def test_scan_market_with_failing_mock(self) -> None:
+    def test_scan_market_with_failing_mock(self, scan_isolation) -> None:
         svc = DataService(provider=FailingProvider(), cache=TieredCache(memory_ttl=0))
         result = svc.scan_market()
         assert isinstance(result, MarketScanResult)

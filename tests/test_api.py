@@ -130,6 +130,72 @@ def test_scanner_endpoints() -> None:
             assert response.status_code == 200
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Live market status endpoints — Sprint 13.1 contract
+# The dashboard showed Unknown/0.00 because the market summary provider
+# rejected yonepse's list-shaped payload.  These tests pin the live
+# snapshot fields (index/change/change_pct/turnover/volume/status) so a
+# regression to MarketSummary.empty() fails the contract loudly.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestMarketStatusEndpoints:
+    def test_market_status_returns_live_payload(self) -> None:
+        """GET /market/status and /market-status return the live snapshot."""
+        from src.data.models import MarketSummary
+
+        fake = MarketSummary(
+            index=2642.4,
+            change=0.55,
+            change_pct=0.02,
+            volume=8701944,
+            turnover=3532105518.27,
+            advances=120,
+            declines=80,
+            unchanged=15,
+            status="Closed",
+        )
+        with patch("src.data.DataService") as mock_svc:
+            mock_svc.return_value.get_market_summary.return_value = fake
+            for path in ("/market/status", "/market-status"):
+                response = client.get(path)
+                assert response.status_code == 200
+                data = response.json()
+                assert data["index"] == 2642.4
+                assert data["change"] == 0.55
+                assert data["change_pct"] == 0.02
+                assert data["volume"] == 8701944
+                assert data["turnover"] == 3532105518.27
+                assert data["advances"] == 120
+                assert data["declines"] == 80
+                assert data["unchanged"] == 15
+                assert data["status"] == "Closed"
+                assert data["is_open"] is False
+                assert data["timestamp"] is not None
+
+    def test_market_status_open_market(self) -> None:
+        """An Open summary serializes is_open=true."""
+        from src.data.models import MarketSummary
+
+        with patch("src.data.DataService") as mock_svc:
+            mock_svc.return_value.get_market_summary.return_value = MarketSummary(
+                index=2650.0, status="Open"
+            )
+            response = client.get("/market-status")
+        assert response.status_code == 200
+        assert response.json()["is_open"] is True
+        assert response.json()["status"] == "Open"
+
+    def test_market_status_provider_failure_returns_500(self) -> None:
+        """Provider failure surfaces as HTTP 500, not a silent empty summary."""
+        with patch("src.data.DataService") as mock_svc:
+            mock_svc.return_value.get_market_summary.side_effect = RuntimeError("boom")
+            for path in ("/market/status", "/market-status"):
+                response = client.get(path)
+                assert response.status_code == 500
+                assert "Failed to fetch market status" in response.json()["detail"]
+
+
 def test_watchlist_endpoints() -> None:
     """Watchlist management GET, POST, DELETE, and scan endpoints return 200 OK."""
     # Load watchlist

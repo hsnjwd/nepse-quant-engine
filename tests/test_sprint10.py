@@ -162,6 +162,67 @@ class TestSingleCsvLoader:
         with pytest.raises(FileNotFoundError):
             load_csv(tmp_path / "missing.csv")
 
+    def test_load_csv_tolerates_stray_quotes_and_title_line(self, tmp_path: Path) -> None:
+        """Scraped files with a title row and stray quote chars still parse.
+
+        Regression: pandas' strict C parser raises ``ParserError: Expecting
+        ',' delimiter`` on files containing unbalanced double-quote
+        characters; the canonical loader must strip them and skip any
+        title/blank rows before the real header instead of 500ing the
+        analyze/portfolio endpoints.
+        """
+        csv_file = tmp_path / "QUOTED.csv"
+        csv_file.write_text(
+            "NABBC - Daily OHLCV\n"
+            "Date,Open,High,Low,Close,Volume\n"
+            "2025-01-03,106,110,102,108,1,200,000\n"
+            '2025-01-02,103,108,98,106,"1,100,000"\n'
+            "2025-01-01,100,105,95,102,1,000,000\n",
+            encoding="utf-8",
+        )
+
+        df = load_csv(csv_file)
+
+        assert list(df["Close"]) == [102.0, 106.0, 108.0]
+        assert list(df["Volume"]) == [1_000_000, 1_100_000, 1_200_000]
+
+    def test_load_csv_blank_line_before_header(self, tmp_path: Path) -> None:
+        """A leading blank line must not defeat OHLCV header detection."""
+        csv_file = tmp_path / "BLANK.csv"
+        csv_file.write_text(
+            "\n\nDate,Open,High,Low,Close,Volume\n"
+            "2025-01-01,100,105,95,102,1000\n",
+            encoding="utf-8",
+        )
+
+        df = load_csv(csv_file)
+
+        assert list(df["Close"]) == [102.0]
+        assert list(df["Volume"]) == [1000.0]
+
+    def test_load_csv_tolerates_unbalanced_quote_in_data_row(self, tmp_path: Path) -> None:
+        """An unbalanced quote in a data row must not break the parse.
+
+        Regression: the analyze/portfolio endpoints 500'd with
+        ``ParserError: Expecting ',' delimiter`` on real scraped files
+        whose rows contain stray double-quote characters.  The schema
+        path strips quotes before splitting, so the file loads with
+        correct Close/Volume values.
+        """
+        csv_file = tmp_path / "QUOTED2.csv"
+        csv_file.write_text(
+            "Date,Open,High,Low,Close,Volume\n"
+            '2025-01-03,106,110,102,108,"1,200,000\n'  # unbalanced quote
+            "2025-01-01,100,105,95,102,1,000,000\n"
+            "2025-01-02,103,108,98,106,1,100,000\n",
+            encoding="utf-8",
+        )
+
+        df = load_csv(csv_file)
+
+        assert list(df["Close"]) == [102.0, 106.0, 108.0]
+        assert list(df["Volume"]) == [1_000_000, 1_100_000, 1_200_000]
+
 
 class TestPathResolver:
     def test_resolves_existing_symbol(self, tmp_path: Path) -> None:
