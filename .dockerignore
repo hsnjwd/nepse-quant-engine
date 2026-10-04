@@ -1,0 +1,75 @@
+# =====================================================================
+# NEPSE Quant Engine — Docker build context ignore file
+# =====================================================================
+# Exclude everything the Docker image does NOT need at runtime.
+
+# Git
+.git
+.gitignore
+.gitattributes
+.github/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv
+venv/
+env/
+.conda/
+ENV/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Project caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+
+# Local data (use Docker volumes instead)
+data/raw/*
+data/history/*
+logs/*
+pids/*
+
+# Environment files (sensitive)
+.env
+.env.*
+!.env.example
+
+# Documentation (not needed at runtime)
+docs/
+README.md
+*.md
+!src/README.md
+
+# Launcher scripts (not needed in container)
+launcher/
+start_engine.bat
+stop_engine.bat
+restart_engine.bat
+
+# Config files for local dev (not needed in container)
+pytest.ini
+setup.cfg
+docker-compose.yml
+Dockerfile
+.dockerignore
