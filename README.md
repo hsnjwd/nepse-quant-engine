@@ -55,7 +55,7 @@ Professional trading terminal with live NEPSE market data, interactive charts, a
 ### Data Service
 Centralised data layer with automatic provider fallback, tiered caching, and live WebSocket feed.
 
-**Single sources of truth (Sprint 10):** all CSV parsing flows through `src/loaders/csv_loader.py::load_csv` (with `resolve_stock_csv_path` for symbol→file resolution), confidence is computed by `src/decision/confidence.py`, API URLs live in `src/config.py`, and the project version is read from the root `VERSION` file via `src/version.py`.
+**Single sources of truth (Sprint 10):** all CSV parsing flows through `src/loaders/csv_loader.py::load_csv` (with `resolve_stock_csv_path` for symbol→file resolution), confidence and decision evidence are produced by the canonical analysis pipeline, and configuration is managed under `src/config/`, and the project version is read from the root `VERSION` file via `src/version.py`.
 
 - **HybridProvider**: Tries multiple NEPSE API sources → local CSV → cache → graceful empty
 - **TieredCache**: In-memory (fast) + disk (persistent) with TTL expiry
@@ -89,71 +89,7 @@ Centralised data layer with automatic provider fallback, tiered caching, and liv
 
 ---
 
-## Repository Structure
-
-```text
-.
-├── .github/workflows/        # CI + Release workflows
-├── assets/                   # Custom CSS and static assets
-├── data/                     # Market CSV price data (volume-mounted in Docker)
-├── docs/                     # Technical documentation
-│   ├── ARCHITECTURE.md       # Architecture overview
-│   ├── BACKTESTING.md        # Backtesting engine documentation
-│   ├── DATA_SERVICE.md       # Data Service architecture
-│   ├── DEPLOYMENT.md         # Deployment guide
-│   ├── CHANGELOG.md          # Release history
-│   ├── CONTRIBUTING.md       # Contribution guidelines
-│   └── ROADMAP.md            # Development roadmap
-├── launcher/                  # Native service launchers (bat / sh)
-├── scripts/                   # Backup and maintenance scripts
-├── src/
-│   ├── alerts/                # Alert rules and notification centre
-│   ├── api/                   # FastAPI REST endpoints
-│   ├── backtest/              # Backtest engine, trade simulator, metrics
-│   ├── bot/                   # Optional Telegram client
-│   ├── data/                  # Centralised DataService, providers, cache, WebSocket
-│   │   ├── service.py        # DataService singleton (single entry point)
-│   │   ├── providers.py      # APIProvider, CSVProvider, HybridProvider
-│   │   ├── cache.py          # MemoryCache, DiskCache, TieredCache
-│   │   ├── models.py         # Dataclass models (MarketSummary, StockQuote, …)
-│   │   ├── websocket.py      # LiveMarketStream with subscriber pattern
-│   │   ├── rate_limiter.py   # Token-bucket rate limiter
-│   │   ├── health.py         # Provider health monitoring
-│   │   ├── metrics.py        # Request metrics collector
-│   │   └── export.py         # Export Center (CSV/Excel/JSON/HTML/PDF)
-│   ├── decision/              # Signal and decision logic
-│   ├── engine/                # Core analysis pipeline
-│   ├── indicators/            # Technical indicators
-│   ├── logging/               # Centralised logging (env-configurable level)
-│   ├── market_structure/      # Support, resistance, trend
-│   ├── optimization/          # Parameter & walk-forward optimisation
-│   ├── paper_trading/         # Paper trading engine (orders, positions, P&L)
-│   ├── portfolio/             # Portfolio database and analytics
-│   ├── regime/                # Market regime detector
-│   ├── replay/                # Market replay engine
-│   ├── scanner/               # Market scanning and ranking
-│   ├── strategies/            # Trading strategies (momentum, breakout, adaptive)
-│   ├── trading/               # Trade journal
-│   ├── ui/                    # Streamlit frontend
-│   │   ├── pages/             # 15+ page modules
-│   │   ├── components/        # Reusable chart/KPI components
-│   │   ├── helpers.py         # Formatting utilities
-│   │   ├── theme.py           # Theme configuration
-│   │   ├── state.py           # Session state management
-│   │   ├── notifications.py   # Notification manager
-│   │   └── shortcuts.py       # Keyboard shortcuts
-│   └── watchlist/             # Watchlist management
-├── tests/                     # 825+ automated tests
-├── app.py                     # Streamlit entry point
-├── Dockerfile                 # Multi-stage Docker build
-├── docker-compose.yml         # Production Docker Compose
-├── .env.example               # Environment variable template
-└── README.md
-```
-
----
-
-## FastAPI Endpoints
+## Repository Structure\n\n```text\n.\n├── .github/workflows/          # CI and release automation\n├── assets/                     # Streamlit/static presentation assets\n├── benchmarks/                 # Performance, soak and production gates\n├── data/                       # Local market data and governed runtime state\n├── docs/                       # Architecture, operations, API and user docs\n├── launcher/                   # Cross-platform service launchers\n├── plugins/                    # External plugin namespace\n├── scripts/                    # Maintenance, corpus and release tooling\n├── src/                        # Production Python package\n│   ├── api/                    # FastAPI routers and schemas\n│   ├── backtesting/            # Canonical backtesting engine\n│   ├── data/                   # Canonical DataService layer\n│   ├── engine/                 # Core analysis orchestration\n│   ├── indicators/             # Technical indicators\n│   ├── portfolio/              # Portfolio persistence and analytics\n│   ├── risk/                   # Risk and position sizing\n│   ├── strategies/             # Strategy implementations/registry\n│   ├── ui/                     # Streamlit pages/components/state\n│   └── watchlist/              # Watchlist management/scanning\n├── sync_store/                 # User sync data/state\n├── tests/                      # Automated test suite\n├── app.py                      # Streamlit application entry point\n├── Dockerfile                  # Production container build\n├── docker-compose.yml          # Web/API/Bot deployment\n├── requirements.txt            # Python dependencies\n├── VERSION                     # Project version\n└── README.md                   # Project entry documentation\n```\n\n### Repository rules\n\n- **Production code belongs in `src/`**. Do not add ad-hoc production modules to the repository root.\n- **Tests belong in `tests/`**. Deprecated `src/test_*.py` smoke scripts and duplicate root launchers have been removed.\n- **`src/backtesting/` is the canonical backtesting package**. Do not create a second implementation.\n- **`src/data/` is the canonical market-data layer**. Analysis code should use `DataService` rather than bypassing provider/caching policy.\n- **`src/ui/` is the canonical Streamlit UI**. The old standalone `ui/` frontend has been removed.\n- **Runtime/generated state must not be committed** unless it is explicitly governed baseline data.\n- **Operational scripts belong in `scripts/`; service launchers belong in `launcher/`.**\n- **Documentation belongs in `docs/`**, with this README focused on onboarding and repository orientation.\n\n## FastAPI Endpoints
 
 | Category | Method | Endpoint | Description |
 | :--- | :--- | :--- | :--- |
@@ -294,7 +230,7 @@ desktop app afterwards so the terminal picks up the fixed path.
 
 ---
 
-## Roadmap
+## Architecture and Development\n\nSee [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the canonical architecture and [docs/REPOSITORY_STRUCTURE.md](docs/REPOSITORY_STRUCTURE.md) for repository maintenance rules.\n\n## Roadmap
 
 For details on planned features, upcoming enhancements, and long-term milestones, refer to the [ROADMAP.md](docs/ROADMAP.md).
 
